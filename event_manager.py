@@ -111,29 +111,44 @@ class EventActionButtons(ui.View):
 
     async def _update_event(self, interaction: discord.Interaction, action: str):
         await interaction.response.defer(ephemeral=True)
+        print(f"[LOG] Обновление события {self.event_id}, действие: {action}")
+
         event = events.get(self.event_id)
         if not event:
+            print(f"[ERROR] Событие {self.event_id} не найдено")
             await interaction.followup.send('❌ Событие не найдено.', ephemeral=True)
             return
 
         user_id = interaction.user.id
+        print(f"[LOG] Пользователь {interaction.user.display_name} (ID: {user_id})")
+
+        # Обновляем множества
         if action == 'join':
             if user_id in event['non_participants']:
                 event['non_participants'].remove(user_id)
+                print("[LOG] Удалён из 'не смогут'")
             if user_id in event['participants']:
                 event['participants'].remove(user_id)
+                print("[LOG] Удалён из 'участники' (повторный отказ)")
             else:
                 event['participants'].add(user_id)
-        else:
+                print("[LOG] Добавлен в 'участники'")
+        else:  # leave
             if user_id in event['participants']:
                 event['participants'].remove(user_id)
+                print("[LOG] Удалён из 'участники'")
             if user_id in event['non_participants']:
                 event['non_participants'].remove(user_id)
+                print("[LOG] Удалён из 'не смогут' (повторный отказ)")
             else:
                 event['non_participants'].add(user_id)
+                print("[LOG] Добавлен в 'не смогут'")
 
         save_events(events)
+        print(f"[LOG] Текущие участники: {event['participants']}")
+        print(f"[LOG] Текущие не участники: {event['non_participants']}")
 
+        # Формируем новый embed
         embed = discord.Embed(
             title=f"📅 {event['title']}",
             description=f"**Дата:** {event['date']}\n**Время:** {event['time']} (МСК)",
@@ -144,11 +159,15 @@ class EventActionButtons(ui.View):
             user = interaction.guild.get_member(uid)
             if user:
                 participants.append(user.display_name)
+            else:
+                print(f"[WARN] Участник с ID {uid} не найден на сервере")
         non_participants = []
         for uid in event['non_participants']:
             user = interaction.guild.get_member(uid)
             if user:
                 non_participants.append(user.display_name)
+            else:
+                print(f"[WARN] Не участник с ID {uid} не найден на сервере")
 
         embed.add_field(
             name=f"✅ Участники ({len(participants)})",
@@ -162,18 +181,30 @@ class EventActionButtons(ui.View):
         )
         embed.set_footer(text=f"ID события: {self.event_id}")
 
+        # Создаём новый View для обновления
         new_view = EventActionButtons(self.event_id)
+
+        # Проверяем, что message_id сохранён
+        if not event.get('message_id'):
+            print("[ERROR] message_id отсутствует в событии")
+            await interaction.followup.send('❌ Ошибка: ID сообщения не сохранён.', ephemeral=True)
+            return
+
         channel = interaction.guild.get_channel(event['channel_id'])
         if not channel:
+            print(f"[ERROR] Канал {event['channel_id']} не найден")
             await interaction.followup.send('❌ Канал не найден.', ephemeral=True)
             return
 
         try:
             msg = await channel.fetch_message(event['message_id'])
+            print(f"[LOG] Найдено сообщение {msg.id}, редактируем...")
             await msg.edit(embed=embed, view=new_view)
+            print("[LOG] Сообщение успешно обновлено")
             await interaction.followup.send('✅ Список обновлён!', ephemeral=True)
         except discord.NotFound:
-            await interaction.followup.send('❌ Сообщение с событием не найдено.', ephemeral=True)
+            print(f"[ERROR] Сообщение {event['message_id']} не найдено в канале {channel.id}")
+            await interaction.followup.send('❌ Сообщение с событием не найдено. Возможно, оно было удалено.', ephemeral=True)
         except Exception as e:
             print(f"[ERROR] Ошибка редактирования: {e}")
             await interaction.followup.send(f'❌ Ошибка обновления: {e}', ephemeral=True)
