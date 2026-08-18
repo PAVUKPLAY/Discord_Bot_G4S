@@ -155,12 +155,17 @@ class EventActionButtons(ui.View):
         )
         embed.set_footer(text=f"ID события: {self.event_id}")
 
+        # Создаём новый View для корректного обновления
+        view = EventActionButtons(self.event_id)
+
         channel = interaction.guild.get_channel(event['channel_id'])
         if channel:
             try:
                 msg = await channel.fetch_message(event['message_id'])
-                await msg.edit(embed=embed, view=self)
+                await msg.edit(embed=embed, view=view)
                 await interaction.response.send_message('✅ Список обновлён!', ephemeral=True)
+            except discord.NotFound:
+                await interaction.response.send_message('❌ Сообщение с событием не найдено. Возможно, оно было удалено.', ephemeral=True)
             except Exception as e:
                 await interaction.response.send_message(f'❌ Ошибка обновления: {e}', ephemeral=True)
         else:
@@ -174,7 +179,6 @@ class CreateEventButton(ui.View):
     async def create_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(CreateEventModal())
 
-# ============= ИСПРАВЛЕННАЯ ФУНКЦИЯ =============
 async def setup_event_button(bot):
     if not EVENT_CHANNEL_ID:
         print("⚠️ EVENT_CHANNEL_ID не задан. Кнопка не создана.")
@@ -193,7 +197,6 @@ async def setup_event_button(bot):
     found = False
     async for msg in channel.history(limit=30):
         if msg.author == bot.user and msg.embeds:
-            # Проверяем компоненты сообщения
             for row in msg.components:
                 for comp in row.children:
                     if hasattr(comp, 'custom_id') and comp.custom_id == 'create_event_button':
@@ -208,7 +211,6 @@ async def setup_event_button(bot):
     if found:
         return
 
-    # Если не нашли – отправляем новое
     print("📤 Отправляем новое сообщение с кнопкой...")
     embed = discord.Embed(
         title="📢 Создание смежки",
