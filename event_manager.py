@@ -1,21 +1,19 @@
 import discord
 from discord import ui
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import os
 import asyncio
-from config import EVENT_CHANNEL_ID, ANNOUNCE_CHANNEL_ID
+from config import EVENT_CHANNEL_ID, ANNOUNCE_CHANNEL_ID, PING_EVERYONE
 
 DATA_FILE = "events_data.json"
 
-# Загрузка и сохранение событий в JSON
 def load_events():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             try:
                 data = json.load(f)
-                # Конвертируем списки участников обратно в множества
                 for eid, ev in data.items():
                     ev['participants'] = set(ev['participants'])
                     ev['non_participants'] = set(ev['non_participants'])
@@ -44,21 +42,18 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
         if not ANNOUNCE_CHANNEL_ID:
             await interaction.response.send_message('❌ Канал для объявлений не настроен.', ephemeral=True)
             return
-        # Проверка формата
         if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', self.date_input.value):
             await interaction.response.send_message('❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ', ephemeral=True)
             return
         if not re.match(r'^\d{2}:\d{2}$', self.time_input.value):
             await interaction.response.send_message('❌ Неверный формат времени. Используйте ЧЧ:ММ', ephemeral=True)
             return
-        # Парсим дату и время
         try:
             event_datetime = datetime.strptime(f"{self.date_input.value} {self.time_input.value}", "%d.%m.%Y %H:%M")
         except ValueError:
             await interaction.response.send_message('❌ Некорректная дата или время.', ephemeral=True)
             return
 
-        # Генерируем ID события
         event_id = f"{int(datetime.now().timestamp())}"
         events[event_id] = {
             'title': self.title_input.value,
@@ -73,7 +68,6 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
         }
         save_events(events)
 
-        # Отправляем embed с кнопками в канал объявлений
         embed = discord.Embed(
             title=f"📅 {self.title_input.value}",
             description=f"**Дата:** {self.date_input.value}\n**Время:** {self.time_input.value} (МСК)",
@@ -89,7 +83,9 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             return
 
         view = EventActionButtons(event_id)
-        msg = await channel.send(embed=embed, view=view)
+        # Отправляем с пингом @everyone, если включено
+        content = "@everyone" if PING_EVERYONE else None
+        msg = await channel.send(content=content, embed=embed, view=view)
         events[event_id]['message_id'] = msg.id
         save_events(events)
 
@@ -122,7 +118,7 @@ class EventActionButtons(ui.View):
                 event['participants'].remove(user_id)
             else:
                 event['participants'].add(user_id)
-        else:  # leave
+        else:
             if user_id in event['participants']:
                 event['participants'].remove(user_id)
             if user_id in event['non_participants']:
@@ -132,7 +128,6 @@ class EventActionButtons(ui.View):
 
         save_events(events)
 
-        # Обновляем embed
         embed = discord.Embed(
             title=f"📅 {event['title']}",
             description=f"**Дата:** {event['date']}\n**Время:** {event['time']} (МСК)",
@@ -180,7 +175,6 @@ class CreateEventButton(ui.View):
     async def create_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(CreateEventModal())
 
-# Функция для установки постоянной кнопки в канале управления
 async def setup_event_button(bot):
     if not EVENT_CHANNEL_ID:
         print("⚠️ EVENT_CHANNEL_ID не задан. Кнопка не создана.")
@@ -192,7 +186,6 @@ async def setup_event_button(bot):
         except Exception as e:
             print(f"❌ Не удалось найти канал EVENT_CHANNEL_ID: {e}")
             return
-    # Проверяем, есть ли уже сообщение с кнопкой
     async for msg in channel.history(limit=50):
         if msg.author == bot.user and msg.embeds:
             if msg.components and any(comp.custom_id == 'create_event_button' for comp in msg.components[0].children):
@@ -206,7 +199,6 @@ async def setup_event_button(bot):
     await channel.send(embed=embed, view=view)
     print("✅ Постоянная кнопка 'Создать смежку' размещена.")
 
-# Задача напоминания о событиях (запускать каждые 60 секунд)
 async def reminder_task(bot):
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -215,10 +207,8 @@ async def reminder_task(bot):
             if event.get('reminded', False):
                 continue
             event_dt = datetime.fromisoformat(event['datetime'])
-            # Если до события осталось от 23 до 25 часов, и напоминание не отправлено
             delta = event_dt - now
             if 23*3600 <= delta.total_seconds() <= 25*3600:
-                # Отправляем напоминание в канал объявлений
                 channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
                 if channel:
                     embed = discord.Embed(
@@ -226,7 +216,8 @@ async def reminder_task(bot):
                         description=f"**{event['title']}** состоится **завтра** в **{event['time']}** (МСК).\nНе забудьте подтвердить участие!",
                         color=discord.Color.orange()
                     )
-                    await channel.send(embed=embed)
+                    content = "@everyone" if PING_EVERYONE else None
+                    await channel.send(content=content, embed=embed)
                     event['reminded'] = True
                     save_events(events)
-        await asyncio.sleep(60)  # проверка каждую минуту
+        await asyncio.sleep(60)
