@@ -34,7 +34,6 @@ def save_events(events):
 events = load_events()
 
 async def update_event_embed(message, event_id):
-    """Обновляет embed сообщения события на основе текущих списков."""
     event = events.get(event_id)
     if not event:
         return
@@ -128,7 +127,6 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             events[event_id]['message_id'] = msg.id
             save_events(events)
 
-            # Добавляем начальные реакции (чтобы пользователи могли ставить)
             await msg.add_reaction('✅')
             await msg.add_reaction('❌')
 
@@ -217,11 +215,10 @@ async def reminder_task(bot):
                     save_events(events)
         await asyncio.sleep(60)
 
-# ==================== Обработчики реакций ====================
+# Обработчики реакций
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
-    # Проверяем, что реакция на сообщении события
     event_id = None
     for eid, ev in events.items():
         if ev['message_id'] == reaction.message.id:
@@ -229,14 +226,11 @@ async def on_reaction_add(reaction, user):
             break
     if not event_id:
         return
-
-    # Разрешаем только ✅ и ❌
     if str(reaction.emoji) not in ('✅', '❌'):
         return
 
     event = events[event_id]
     if str(reaction.emoji) == '✅':
-        # Убираем из "не смогут", если был там
         if user.id in event['non_participants']:
             event['non_participants'].remove(user.id)
         event['participants'].add(user.id)
@@ -251,7 +245,6 @@ async def on_reaction_add(reaction, user):
 async def on_reaction_remove(reaction, user):
     if user.bot:
         return
-    # Находим событие по сообщению
     event_id = None
     for eid, ev in events.items():
         if ev['message_id'] == reaction.message.id:
@@ -271,7 +264,6 @@ async def on_reaction_remove(reaction, user):
     save_events(events)
     await update_event_embed(reaction.message, event_id)
 
-# При запуске бота синхронизируем все существующие события (обновим embed, если реакции уже есть)
 async def sync_events(bot):
     for eid, event in events.items():
         channel = bot.get_channel(event['channel_id'])
