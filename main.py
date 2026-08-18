@@ -11,6 +11,9 @@ intents.reactions = True
 intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
+# Удаляем стандартную команду help, чтобы добавить свою
+bot.remove_command('help')
+
 monitor_message = None
 
 # ==================== КОМАНДА HELP ====================
@@ -61,7 +64,7 @@ async def help_command(ctx):
         await ctx.author.send(embed=embed)
     except discord.Forbidden:
         # Если ЛС закрыты, отправляем в канал с упоминанием и удаляем через 15 сек
-        msg = await ctx.send(
+        await ctx.send(
             f"{ctx.author.mention}, ваши личные сообщения закрыты. Включите их, чтобы получить справку.",
             delete_after=15
         )
