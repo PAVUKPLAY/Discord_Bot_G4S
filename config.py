@@ -7,10 +7,11 @@ TARGET_CHANNEL_ID = os.getenv('TARGET_CHANNEL_ID')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
-# Канал для постоянной кнопки управления
 EVENT_CHANNEL_ID = os.getenv('EVENT_CHANNEL_ID')
-# Канал, куда будут публиковаться объявления о смежках
 ANNOUNCE_CHANNEL_ID = os.getenv('ANNOUNCE_CHANNEL_ID')
+
+# Флаг для включения/отключения пинга @everyone (по умолчанию включено)
+PING_EVERYONE = os.getenv('PING_EVERYONE', 'True') == 'True'
 
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN не задан!")
