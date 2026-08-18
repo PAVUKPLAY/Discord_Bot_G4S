@@ -193,3 +193,15 @@ async def update_status(bot, monitor_message):
     except Exception as e:
         print(f"Критическая ошибка в цикле автообновления: {e}")
         return monitor_message
+
+# Новая функция для очистки старых сообщений мониторинга при старте
+async def cleanup_monitor(bot):
+    channel = bot.get_channel(TARGET_CHANNEL_ID)
+    if not channel:
+        return
+    async for msg in channel.history(limit=100):
+        if msg.author == bot.user and msg.embeds:
+            for embed in msg.embeds:
+                if embed.title and "Мониторинг G4S" in embed.title:
+                    await msg.delete()
+                    break
