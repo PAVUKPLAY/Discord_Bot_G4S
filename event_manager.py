@@ -83,7 +83,6 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             return
 
         view = EventActionButtons(event_id)
-        # Отправляем с пингом @everyone, если включено
         content = "@everyone" if PING_EVERYONE else None
         msg = await channel.send(content=content, embed=embed, view=view)
         events[event_id]['message_id'] = msg.id
@@ -175,21 +174,42 @@ class CreateEventButton(ui.View):
     async def create_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(CreateEventModal())
 
+# ============= ИСПРАВЛЕННАЯ ФУНКЦИЯ =============
 async def setup_event_button(bot):
     if not EVENT_CHANNEL_ID:
         print("⚠️ EVENT_CHANNEL_ID не задан. Кнопка не создана.")
         return
+
     channel = bot.get_channel(EVENT_CHANNEL_ID)
     if not channel:
         try:
             channel = await bot.fetch_channel(EVENT_CHANNEL_ID)
         except Exception as e:
-            print(f"❌ Не удалось найти канал EVENT_CHANNEL_ID: {e}")
+            print(f"❌ Не удалось найти канал с ID {EVENT_CHANNEL_ID}: {e}")
             return
-    async for msg in channel.history(limit=50):
+
+    print(f"🔍 Проверяем канал {channel.name} (ID: {channel.id}) на наличие кнопки...")
+
+    found = False
+    async for msg in channel.history(limit=30):
         if msg.author == bot.user and msg.embeds:
-            if msg.components and any(comp.custom_id == 'create_event_button' for comp in msg.components[0].children):
-                return
+            # Проверяем компоненты сообщения
+            for row in msg.components:
+                for comp in row.children:
+                    if hasattr(comp, 'custom_id') and comp.custom_id == 'create_event_button':
+                        found = True
+                        print(f"✅ Найдено существующее сообщение с кнопкой (ID: {msg.id})")
+                        break
+                if found:
+                    break
+        if found:
+            break
+
+    if found:
+        return
+
+    # Если не нашли – отправляем новое
+    print("📤 Отправляем новое сообщение с кнопкой...")
     embed = discord.Embed(
         title="📢 Создание смежки",
         description="Нажмите на кнопку ниже, чтобы создать новое событие для отряда.",
