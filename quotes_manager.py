@@ -1,60 +1,165 @@
-import json
-import os
-import random
 import discord
-from datetime import datetime
-from config import EVENT_CHANNEL_ID, ANNOUNCE_CHANNEL_ID
+from discord.ext import commands, tasks
+from config import DISCORD_TOKEN
+from arma_monitor import update_status, cleanup_monitor
+from ai_chat import on_ai_message
+import event_manager
+import quotes_manager
 
-QUOTES_FILE = "quotes.json"
+intents = discord.Intents.default()
+intents.message_content = True
+intents.reactions = True
+intents.members = True
 
-# Загружаем цитаты из файла
-def load_quotes():
-    if os.path.exists(QUOTES_FILE):
-        with open(QUOTES_FILE, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except:
-                return []
-    return []
+bot = commands.Bot(command_prefix='!', intents=intents)
+bot.remove_command('help')
 
-# Сохраняем цитаты в файл
-def save_quotes(quotes):
-    with open(QUOTES_FILE, "w", encoding="utf-8") as f:
-        json.dump(quotes, f, ensure_ascii=False, indent=2)
+monitor_message = None
 
-quotes = load_quotes()
+# ==================== КОМАНДА HELP ====================
+@bot.command(name='help')
+async def help_command(ctx):
+    try:
+        await ctx.message.delete()
+    except:
+        pass
 
-# Функция для добавления цитаты
-async def add_quote(author_id, author_name, text):
-    quote_id = len(quotes) + 1
-    quotes.append({
-        "id": quote_id,
-        "author_id": author_id,
-        "author_name": author_name,
-        "text": text,
-        "timestamp": datetime.now().isoformat()
-    })
-    save_quotes(quotes)
-    return quote_id
+    embed = discord.Embed(
+        title="🛡️ Справка по боту G4S Сподручный",
+        description="Вот что я умею:",
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name="🤖 AI-чат",
+        value="Напишите **`Ученый <вопрос>`** или **`Учёный <вопрос>`**, или просто упомяните меня, чтобы задать вопрос.",
+        inline=False
+    )
+    embed.add_field(
+        name="🛡️ Мониторинг сервера Arma 3",
+        value="Каждую минуту я обновляю информацию о сервере в специальном канале.",
+        inline=False
+    )
+    embed.add_field(
+        name="📝 Цитатник",
+        value=(
+            "Доступные команды:\n"
+            "`!цитата` – случайная цитата\n"
+            "`!цитаты [ник]` – цитаты пользователя\n"
+            "`!добавить_цитату <текст>` – добавить цитату (доступно всем)\n"
+            "`!удалить_цитату <id>` – удалить цитату (только для модераторов)"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="❓ Эта справка",
+        value="Используйте **`!help`** в любом канале.",
+        inline=False
+    )
+    embed.set_footer(text="G4S Сподручный • v1.0")
 
-# Функция для удаления цитаты (по id)
-async def remove_quote(quote_id):
-    global quotes
-    for i, q in enumerate(quotes):
-        if q["id"] == quote_id:
-            del quotes[i]
-            save_quotes(quotes)
-            return True
-    return False
+    try:
+        await ctx.author.send(embed=embed)
+    except discord.Forbidden:
+        await ctx.send(
+            f"{ctx.author.mention}, ваши ЛС закрыты. Включите их, чтобы получить справку.",
+            delete_after=15
+        )
+    except Exception as e:
+        await ctx.send(f"❌ Не удалось отправить справку: {e}", delete_after=10)
 
-# Функция для получения случайной цитаты
-async def get_random_quote():
+# ==================== КОМАНДЫ ЦИТАТНИКА ====================
+@bot.command(name='цитата')
+async def random_quote(ctx):
+    quote = await quotes_manager.get_random_quote()
+    if not quote:
+        await ctx.send("📭 Цитат пока нет. Добавьте первую с помощью `!добавить_цитату`.")
+        return
+    embed = discord.Embed(
+        title="📜 Случайная цитата",
+        description=f"\"{quote['text']}\"",
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text=f"Автор: {quote['author_name']} • ID: {quote['id']}")
+    await ctx.send(embed=embed)
+
+@bot.command(name='цитаты')
+async def user_quotes(ctx, *, user: discord.User = None):
+    if user is None:
+        user = ctx.author
+    quotes = await quotes_manager.get_user_quotes(user.id)
     if not quotes:
-        return None
-    return random.choice(quotes)
+        await ctx.send(f"📭 У пользователя {user.display_name} нет цитат.")
+        return
+    embed = discord.Embed(
+        title=f"📜 Цитаты {user.display_name}",
+        color=discord.Color.blue()
+    )
+    for q in quotes[:10]:
+        embed.add_field(
+            name=f"ID {q['id']}",
+            value=f"\"{q['text']}\"",
+            inline=False
+        )
+    if len(quotes) > 10:
+        embed.set_footer(text=f"Показано 10 из {len(quotes)} цитат.")
+    await ctx.send(embed=embed)
 
-# Функция для получения цитат пользователя
-async def get_user_quotes(user_id):
-    return [q for q in quotes if q["author_id"] == user_id]
+@bot.command(name='добавить_цитату')
+async def add_quote_cmd(ctx, *, text):
+    """Добавляет новую цитату (доступно всем)."""
+    if len(text) > 500:
+        await ctx.send("❌ Слишком длинная цитата (максимум 500 символов).", delete_after=10)
+        return
 
-# Команды цитатника регистрируем в main.py
+    quote_id = await quotes_manager.add_quote(ctx.author.id, ctx.author.display_name, text)
+    await ctx.send(f"✅ Цитата добавлена (ID: {quote_id})")
+
+@bot.command(name='удалить_цитату')
+async def remove_quote_cmd(ctx, quote_id: int):
+    """Удаляет цитату по ID (только для модераторов)."""
+    if not ctx.author.guild_permissions.manage_messages:
+        await ctx.send("❌ У вас недостаточно прав для удаления цитаты.", delete_after=10)
+        return
+
+    success = await quotes_manager.remove_quote(quote_id)
+    if success:
+        await ctx.send(f"✅ Цитата с ID {quote_id} удалена.")
+    else:
+        await ctx.send(f"❌ Цитата с ID {quote_id} не найдена.")
+
+# ==================== СОБЫТИЯ И ЗАДАЧИ ====================
+@bot.event
+async def on_ready():
+    global monitor_message
+    print(f'🛡️ Бот {bot.user.name} успешно запущен и готов к работе!')
+
+    bot.add_listener(event_manager.on_reaction_add, 'on_reaction_add')
+    bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
+
+    await event_manager.sync_events(bot)
+
+    await cleanup_monitor(bot)
+    monitor_message = await update_status(bot, None)
+
+    await event_manager.cleanup_event_button(bot)
+
+    if not update_status_task.is_running():
+        update_status_task.start()
+    bot.loop.create_task(event_manager.reminder_task(bot))
+
+@tasks.loop(seconds=60)
+async def update_status_task():
+    global monitor_message
+    monitor_message = await update_status(bot, monitor_message)
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+    if message.content.startswith('!'):
+        await bot.process_commands(message)
+        return
+    await on_ai_message(message, bot)
+
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)
