@@ -45,7 +45,8 @@ async def help_command(ctx):
             "Доступные команды:\n"
             "`!цитата` – случайная цитата\n"
             "`!цитаты [ник]` – цитаты пользователя\n"
-            "`!добавить_цитату <текст>` – добавить цитату (доступно всем)\n"
+            "`!добавить` – в ответ на сообщение, чтобы добавить его как цитату\n"
+            "`!добавить <текст>` – добавить цитату вручную (автор – вы)\n"
             "`!удалить_цитату <id>` – удалить цитату (только для модераторов)"
         ),
         inline=False
@@ -72,7 +73,7 @@ async def help_command(ctx):
 async def random_quote(ctx):
     quote = await quotes_manager.get_random_quote()
     if not quote:
-        await ctx.send("📭 Цитат пока нет. Добавьте первую с помощью `!добавить_цитату`.")
+        await ctx.send("📭 Цитат пока нет. Добавьте первую с помощью `!добавить`.")
         return
     embed = discord.Embed(
         title="📜 Случайная цитата",
@@ -104,19 +105,50 @@ async def user_quotes(ctx, *, user: discord.User = None):
         embed.set_footer(text=f"Показано 10 из {len(quotes)} цитат.")
     await ctx.send(embed=embed)
 
-@bot.command(name='добавить_цитату')
-async def add_quote_cmd(ctx, *, text):
-    """Добавляет новую цитату (доступно всем)."""
-    if len(text) > 500:
-        await ctx.send("❌ Слишком длинная цитата (максимум 500 символов).", delete_after=10)
+@bot.command(name='добавить', aliases=['добавить_цитату'])
+async def add_quote_cmd(ctx, *, text: str = None):
+    """
+    Добавляет цитату.
+    Если команда вызвана в ответ на сообщение (без текста) – берётся текст того сообщения и его автор.
+    Если указан текст – добавляется этот текст, автором считается автор команды.
+    """
+    ref = ctx.message.reference
+    if ref is not None:
+        try:
+            replied_msg = await ctx.channel.fetch_message(ref.message_id)
+        except discord.NotFound:
+            await ctx.send("❌ Сообщение, на которое вы ответили, не найдено.", delete_after=10)
+            return
+        except Exception as e:
+            await ctx.send(f"❌ Ошибка при получении сообщения: {e}", delete_after=10)
+            return
+
+        quote_text = replied_msg.content
+        if not quote_text:
+            await ctx.send("❌ В этом сообщении нет текста для цитаты.", delete_after=10)
+            return
+        author_id = replied_msg.author.id
+        author_name = replied_msg.author.display_name
+
+        quote_id = await quotes_manager.add_quote(author_id, author_name, quote_text)
+        await ctx.send(f"✅ Цитата добавлена (ID: {quote_id})")
         return
 
-    quote_id = await quotes_manager.add_quote(ctx.author.id, ctx.author.display_name, text)
-    await ctx.send(f"✅ Цитата добавлена (ID: {quote_id})")
+    if text:
+        if len(text) > 500:
+            await ctx.send("❌ Слишком длинная цитата (максимум 500 символов).", delete_after=10)
+            return
+        quote_id = await quotes_manager.add_quote(ctx.author.id, ctx.author.display_name, text)
+        await ctx.send(f"✅ Цитата добавлена (ID: {quote_id})")
+        return
+
+    await ctx.send(
+        "❌ Чтобы добавить цитату, либо ответьте на сообщение и напишите `!добавить`, либо укажите текст: `!добавить <текст>`.",
+        delete_after=15
+    )
 
 @bot.command(name='удалить_цитату')
 async def remove_quote_cmd(ctx, quote_id: int):
-    """Удаляет цитату по ID (только для модераторов)."""
     if not ctx.author.guild_permissions.manage_messages:
         await ctx.send("❌ У вас недостаточно прав для удаления цитаты.", delete_after=10)
         return
