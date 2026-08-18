@@ -9,8 +9,6 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
 EVENT_CHANNEL_ID = os.getenv('EVENT_CHANNEL_ID')
 ANNOUNCE_CHANNEL_ID = os.getenv('ANNOUNCE_CHANNEL_ID')
-
-# Флаг для включения/отключения пинга @everyone (по умолчанию включено)
 PING_EVERYONE = os.getenv('PING_EVERYONE', 'True') == 'True'
 
 if not DISCORD_TOKEN:
