@@ -194,7 +194,6 @@ async def update_status(bot, monitor_message):
         print(f"Критическая ошибка в цикле автообновления: {e}")
         return monitor_message
 
-# Новая функция для очистки старых сообщений мониторинга при старте
 async def cleanup_monitor(bot):
     channel = bot.get_channel(TARGET_CHANNEL_ID)
     if not channel:
