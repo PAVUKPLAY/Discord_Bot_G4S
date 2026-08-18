@@ -33,6 +33,45 @@ def save_events(events):
 
 events = load_events()
 
+async def update_event_embed(message, event_id):
+    """Обновляет embed сообщения события на основе текущих списков."""
+    event = events.get(event_id)
+    if not event:
+        return
+
+    embed = discord.Embed(
+        title=f"📅 {event['title']}",
+        description=f"**Дата:** {event['date']}\n**Время:** {event['time']} (МСК)\n\n"
+                    f"**Ставьте реакции:**\n✅ – буду участвовать\n❌ – не смогу",
+        color=discord.Color.gold()
+    )
+
+    guild = message.guild
+    participants = []
+    for uid in event['participants']:
+        user = guild.get_member(uid)
+        if user:
+            participants.append(user.display_name)
+    non_participants = []
+    for uid in event['non_participants']:
+        user = guild.get_member(uid)
+        if user:
+            non_participants.append(user.display_name)
+
+    embed.add_field(
+        name=f"✅ Участники ({len(participants)})",
+        value="\n".join(participants) if participants else "Пока никого",
+        inline=True
+    )
+    embed.add_field(
+        name=f"❌ Не смогут ({len(non_participants)})",
+        value="\n".join(non_participants) if non_participants else "Пока никого",
+        inline=True
+    )
+    embed.set_footer(text=f"ID события: {event_id}")
+
+    await message.edit(embed=embed)
+
 class CreateEventModal(ui.Modal, title='Создание смежки'):
     title_input = ui.TextInput(label='Название смежки', placeholder='Например: Отрядная операция', default='Отрядная смежка')
     date_input = ui.TextInput(label='Дата (ДД.ММ.ГГГГ)', placeholder='25.12.2025')
@@ -71,7 +110,8 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
 
             embed = discord.Embed(
                 title=f"📅 {self.title_input.value}",
-                description=f"**Дата:** {self.date_input.value}\n**Время:** {self.time_input.value} (МСК)",
+                description=f"**Дата:** {self.date_input.value}\n**Время:** {self.time_input.value} (МСК)\n\n"
+                            f"**Ставьте реакции:**\n✅ – буду участвовать\n❌ – не смогу",
                 color=discord.Color.gold()
             )
             embed.add_field(name="✅ Участники", value="Пока никого", inline=True)
@@ -83,131 +123,19 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
                 await interaction.response.send_message('❌ Канал объявлений не найден.', ephemeral=True)
                 return
 
-            view = EventActionButtons(event_id)
             content = "@everyone" if PING_EVERYONE else None
-            msg = await channel.send(content=content, embed=embed, view=view)
+            msg = await channel.send(content=content, embed=embed)
             events[event_id]['message_id'] = msg.id
             save_events(events)
+
+            # Добавляем начальные реакции (чтобы пользователи могли ставить)
+            await msg.add_reaction('✅')
+            await msg.add_reaction('❌')
 
             await interaction.response.send_message(f'✅ Смежка создана! Объявление отправлено в канал {channel.mention}', ephemeral=True)
         except Exception as e:
             print(f"[ERROR] Ошибка в on_submit: {e}")
             await interaction.response.send_message(f'❌ Произошла ошибка: {e}', ephemeral=True)
-
-class EventActionButtons(ui.View):
-    def __init__(self, event_id):
-        super().__init__(timeout=None)
-        self.event_id = event_id
-
-    @ui.button(label='✅ Буду участвовать', style=discord.ButtonStyle.green, custom_id='event_join')
-    async def join_button(self, interaction: discord.Interaction, button: ui.Button):
-        print(f"[LOG] Нажата кнопка 'Буду участвовать' от {interaction.user.display_name}")
-        await self._update_event(interaction, 'join')
-
-    @ui.button(label='❌ Не могу', style=discord.ButtonStyle.red, custom_id='event_leave')
-    async def leave_button(self, interaction: discord.Interaction, button: ui.Button):
-        print(f"[LOG] Нажата кнопка 'Не могу' от {interaction.user.display_name}")
-        await self._update_event(interaction, 'leave')
-
-    async def _update_event(self, interaction: discord.Interaction, action: str):
-        await interaction.response.defer(ephemeral=True)
-        print(f"[LOG] Обновление события {self.event_id}, действие: {action}")
-
-        event = events.get(self.event_id)
-        if not event:
-            print(f"[ERROR] Событие {self.event_id} не найдено")
-            await interaction.followup.send('❌ Событие не найдено.', ephemeral=True)
-            return
-
-        user_id = interaction.user.id
-        print(f"[LOG] Пользователь {interaction.user.display_name} (ID: {user_id})")
-
-        # Обновляем множества
-        if action == 'join':
-            if user_id in event['non_participants']:
-                event['non_participants'].remove(user_id)
-                print("[LOG] Удалён из 'не смогут'")
-            if user_id in event['participants']:
-                event['participants'].remove(user_id)
-                print("[LOG] Удалён из 'участники' (повторный отказ)")
-            else:
-                event['participants'].add(user_id)
-                print("[LOG] Добавлен в 'участники'")
-        else:  # leave
-            if user_id in event['participants']:
-                event['participants'].remove(user_id)
-                print("[LOG] Удалён из 'участники'")
-            if user_id in event['non_participants']:
-                event['non_participants'].remove(user_id)
-                print("[LOG] Удалён из 'не смогут' (повторный отказ)")
-            else:
-                event['non_participants'].add(user_id)
-                print("[LOG] Добавлен в 'не смогут'")
-
-        save_events(events)
-        print(f"[LOG] Текущие участники: {event['participants']}")
-        print(f"[LOG] Текущие не участники: {event['non_participants']}")
-
-        # Формируем новый embed
-        embed = discord.Embed(
-            title=f"📅 {event['title']}",
-            description=f"**Дата:** {event['date']}\n**Время:** {event['time']} (МСК)",
-            color=discord.Color.gold()
-        )
-        participants = []
-        for uid in event['participants']:
-            user = interaction.guild.get_member(uid)
-            if user:
-                participants.append(user.display_name)
-            else:
-                print(f"[WARN] Участник с ID {uid} не найден на сервере")
-        non_participants = []
-        for uid in event['non_participants']:
-            user = interaction.guild.get_member(uid)
-            if user:
-                non_participants.append(user.display_name)
-            else:
-                print(f"[WARN] Не участник с ID {uid} не найден на сервере")
-
-        embed.add_field(
-            name=f"✅ Участники ({len(participants)})",
-            value="\n".join(participants) if participants else "Пока никого",
-            inline=True
-        )
-        embed.add_field(
-            name=f"❌ Не смогут ({len(non_participants)})",
-            value="\n".join(non_participants) if non_participants else "Пока никого",
-            inline=True
-        )
-        embed.set_footer(text=f"ID события: {self.event_id}")
-
-        # Создаём новый View для обновления
-        new_view = EventActionButtons(self.event_id)
-
-        # Проверяем, что message_id сохранён
-        if not event.get('message_id'):
-            print("[ERROR] message_id отсутствует в событии")
-            await interaction.followup.send('❌ Ошибка: ID сообщения не сохранён.', ephemeral=True)
-            return
-
-        channel = interaction.guild.get_channel(event['channel_id'])
-        if not channel:
-            print(f"[ERROR] Канал {event['channel_id']} не найден")
-            await interaction.followup.send('❌ Канал не найден.', ephemeral=True)
-            return
-
-        try:
-            msg = await channel.fetch_message(event['message_id'])
-            print(f"[LOG] Найдено сообщение {msg.id}, редактируем...")
-            await msg.edit(embed=embed, view=new_view)
-            print("[LOG] Сообщение успешно обновлено")
-            await interaction.followup.send('✅ Список обновлён!', ephemeral=True)
-        except discord.NotFound:
-            print(f"[ERROR] Сообщение {event['message_id']} не найдено в канале {channel.id}")
-            await interaction.followup.send('❌ Сообщение с событием не найдено. Возможно, оно было удалено.', ephemeral=True)
-        except Exception as e:
-            print(f"[ERROR] Ошибка редактирования: {e}")
-            await interaction.followup.send(f'❌ Ошибка обновления: {e}', ephemeral=True)
 
 class CreateEventButton(ui.View):
     def __init__(self):
@@ -288,3 +216,69 @@ async def reminder_task(bot):
                     event['reminded'] = True
                     save_events(events)
         await asyncio.sleep(60)
+
+# ==================== Обработчики реакций ====================
+async def on_reaction_add(reaction, user):
+    if user.bot:
+        return
+    # Проверяем, что реакция на сообщении события
+    event_id = None
+    for eid, ev in events.items():
+        if ev['message_id'] == reaction.message.id:
+            event_id = eid
+            break
+    if not event_id:
+        return
+
+    # Разрешаем только ✅ и ❌
+    if str(reaction.emoji) not in ('✅', '❌'):
+        return
+
+    event = events[event_id]
+    if str(reaction.emoji) == '✅':
+        # Убираем из "не смогут", если был там
+        if user.id in event['non_participants']:
+            event['non_participants'].remove(user.id)
+        event['participants'].add(user.id)
+    else:  # ❌
+        if user.id in event['participants']:
+            event['participants'].remove(user.id)
+        event['non_participants'].add(user.id)
+
+    save_events(events)
+    await update_event_embed(reaction.message, event_id)
+
+async def on_reaction_remove(reaction, user):
+    if user.bot:
+        return
+    # Находим событие по сообщению
+    event_id = None
+    for eid, ev in events.items():
+        if ev['message_id'] == reaction.message.id:
+            event_id = eid
+            break
+    if not event_id:
+        return
+
+    event = events[event_id]
+    if str(reaction.emoji) == '✅':
+        if user.id in event['participants']:
+            event['participants'].remove(user.id)
+    elif str(reaction.emoji) == '❌':
+        if user.id in event['non_participants']:
+            event['non_participants'].remove(user.id)
+
+    save_events(events)
+    await update_event_embed(reaction.message, event_id)
+
+# При запуске бота синхронизируем все существующие события (обновим embed, если реакции уже есть)
+async def sync_events(bot):
+    for eid, event in events.items():
+        channel = bot.get_channel(event['channel_id'])
+        if not channel:
+            continue
+        try:
+            msg = await channel.fetch_message(event['message_id'])
+            await update_event_embed(msg, eid)
+        except Exception as e:
+            print(f"[WARN] Не удалось синхронизировать событие {eid}: {e}")
