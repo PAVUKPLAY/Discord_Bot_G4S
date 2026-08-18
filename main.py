@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 from config import DISCORD_TOKEN
-from arma_monitor import update_status
+from arma_monitor import update_status, cleanup_monitor
 from ai_chat import on_ai_message
 import event_manager
 
@@ -11,8 +11,7 @@ intents.reactions = True
 intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
-# Удаляем стандартную команду help, чтобы добавить свою
-bot.remove_command('help')
+bot.remove_command('help')  # Удаляем стандартную help
 
 monitor_message = None
 
@@ -20,13 +19,11 @@ monitor_message = None
 @bot.command(name='help')
 async def help_command(ctx):
     """Показывает справку по всем функциям бота и удаляет сообщение."""
-    # Удаляем сообщение пользователя (если есть права)
     try:
         await ctx.message.delete()
     except:
-        pass  # если прав нет, просто игнорируем
+        pass
 
-    # Формируем красивый embed
     embed = discord.Embed(
         title="🛡️ Справка по боту G4S Спортивный",
         description="Вот что я умею:",
@@ -59,11 +56,9 @@ async def help_command(ctx):
     )
     embed.set_footer(text="G4S Спортивный БОТ • v1.0")
 
-    # Пытаемся отправить в личные сообщения
     try:
         await ctx.author.send(embed=embed)
     except discord.Forbidden:
-        # Если ЛС закрыты, отправляем в канал с упоминанием и удаляем через 15 сек
         await ctx.send(
             f"{ctx.author.mention}, ваши личные сообщения закрыты. Включите их, чтобы получить справку.",
             delete_after=15
@@ -74,13 +69,26 @@ async def help_command(ctx):
 # ==================== СОБЫТИЯ И ЗАДАЧИ ====================
 @bot.event
 async def on_ready():
+    global monitor_message
     print(f'🛡️ Бот {bot.user.name} успешно запущен и готов к работе!')
+
+    # Регистрируем обработчики реакций
     bot.add_listener(event_manager.on_reaction_add, 'on_reaction_add')
     bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
+
+    # 1. Синхронизируем существующие события (обновляем embed'ы)
     await event_manager.sync_events(bot)
+
+    # 2. Очищаем старые сообщения мониторинга и создаём новое
+    await cleanup_monitor(bot)
+    monitor_message = await update_status(bot, None)
+
+    # 3. Очищаем старые сообщения с кнопкой и создаём новую
+    await event_manager.cleanup_event_button(bot)
+
+    # 4. Запускаем фоновые задачи
     if not update_status_task.is_running():
         update_status_task.start()
-    await event_manager.setup_event_button(bot)
     bot.loop.create_task(event_manager.reminder_task(bot))
 
 @tasks.loop(seconds=60)
@@ -92,11 +100,9 @@ async def update_status_task():
 async def on_message(message):
     if message.author == bot.user:
         return
-    # Если сообщение начинается с '!', обрабатываем как команду
     if message.content.startswith('!'):
         await bot.process_commands(message)
         return
-    # Иначе передаём AI-обработчику
     await on_ai_message(message, bot)
 
 if __name__ == "__main__":
