@@ -18,20 +18,20 @@ monitor_message = None
 # ==================== КОМАНДА HELP ====================
 @bot.command(name='help')
 async def help_command(ctx):
-    """Показывает справку по всем функциям бота и удаляет сообщение."""
+    """Показывает справку по функциям бота (AI и мониторинг)."""
     try:
         await ctx.message.delete()
     except:
         pass
 
     embed = discord.Embed(
-        title="🛡️ Справка по боту G4S Спортивный",
+        title="🛡️ Справка по боту G4S Сподручный",
         description="Вот что я умею:",
         color=discord.Color.blue()
     )
     embed.add_field(
         name="🤖 AI-чат",
-        value="Напишите **`Ученый <вопрос>`** или **`Учёный <вопрос>`**, или просто упомяните меня (например, `@G4S Спортивный БОТ привет`), чтобы задать вопрос. Я отвечу с использованием DeepSeek.",
+        value="Напишите **`Ученый <вопрос>`** или **`Учёный <вопрос>`**, или просто упомяните меня (например, `@G4S Сподручный БОТ привет`), чтобы задать вопрос. Я отвечу с использованием DeepSeek.",
         inline=False
     )
     embed.add_field(
@@ -40,21 +40,11 @@ async def help_command(ctx):
         inline=False
     )
     embed.add_field(
-        name="📅 Создание смежек",
-        value="В канале управления есть кнопка **«Создать смежку»**. Нажмите её, заполните форму (название, дата, время). Я опубликую объявление в канале анонсов. Чтобы подтвердить участие, поставьте реакцию ✅ или ❌ на сообщении. Списки обновляются автоматически.",
-        inline=False
-    )
-    embed.add_field(
-        name="🔔 Напоминания о смежках",
-        value="За 24 часа до события я отправлю напоминание с упоминанием @everyone (если это включено в настройках).",
-        inline=False
-    )
-    embed.add_field(
         name="❓ Эта справка",
         value="Используйте **`!help`** в любом канале, чтобы снова увидеть это сообщение.",
         inline=False
     )
-    embed.set_footer(text="G4S Спортивный БОТ • v1.0")
+    embed.set_footer(text="G4S Сподручный • v1.0")
 
     try:
         await ctx.author.send(embed=embed)
@@ -76,17 +66,17 @@ async def on_ready():
     bot.add_listener(event_manager.on_reaction_add, 'on_reaction_add')
     bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
 
-    # 1. Синхронизируем существующие события (обновляем embed'ы)
+    # Синхронизируем существующие события (обновляем embed'ы смежек)
     await event_manager.sync_events(bot)
 
-    # 2. Очищаем старые сообщения мониторинга и создаём новое
+    # Очищаем старые сообщения мониторинга и создаём новое
     await cleanup_monitor(bot)
     monitor_message = await update_status(bot, None)
 
-    # 3. Очищаем старые сообщения с кнопкой и создаём новую
+    # Очищаем старые сообщения с кнопкой и создаём новую
     await event_manager.cleanup_event_button(bot)
 
-    # 4. Запускаем фоновые задачи
+    # Запускаем фоновые задачи
     if not update_status_task.is_running():
         update_status_task.start()
     bot.loop.create_task(event_manager.reminder_task(bot))
