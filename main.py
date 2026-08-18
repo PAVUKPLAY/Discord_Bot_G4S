@@ -16,7 +16,14 @@ monitor_message = None
 # ==================== КОМАНДА HELP ====================
 @bot.command(name='help')
 async def help_command(ctx):
-    """Показывает справку по всем функциям бота."""
+    """Показывает справку по всем функциям бота и удаляет сообщение."""
+    # Удаляем сообщение пользователя (если есть права)
+    try:
+        await ctx.message.delete()
+    except:
+        pass  # если прав нет, просто игнорируем
+
+    # Формируем красивый embed
     embed = discord.Embed(
         title="🛡️ Справка по боту G4S Спортивный",
         description="Вот что я умею:",
@@ -48,7 +55,18 @@ async def help_command(ctx):
         inline=False
     )
     embed.set_footer(text="G4S Спортивный БОТ • v1.0")
-    await ctx.send(embed=embed)
+
+    # Пытаемся отправить в личные сообщения
+    try:
+        await ctx.author.send(embed=embed)
+    except discord.Forbidden:
+        # Если ЛС закрыты, отправляем в канал с упоминанием и удаляем через 15 сек
+        msg = await ctx.send(
+            f"{ctx.author.mention}, ваши личные сообщения закрыты. Включите их, чтобы получить справку.",
+            delete_after=15
+        )
+    except Exception as e:
+        await ctx.send(f"❌ Не удалось отправить справку: {e}", delete_after=10)
 
 # ==================== СОБЫТИЯ И ЗАДАЧИ ====================
 @bot.event
