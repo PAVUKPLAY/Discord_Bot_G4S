@@ -39,56 +39,60 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
     time_input = ui.TextInput(label='Время (ЧЧ:ММ) по МСК', placeholder='19:00')
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not ANNOUNCE_CHANNEL_ID:
-            await interaction.response.send_message('❌ Канал для объявлений не настроен.', ephemeral=True)
-            return
-        if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', self.date_input.value):
-            await interaction.response.send_message('❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ', ephemeral=True)
-            return
-        if not re.match(r'^\d{2}:\d{2}$', self.time_input.value):
-            await interaction.response.send_message('❌ Неверный формат времени. Используйте ЧЧ:ММ', ephemeral=True)
-            return
         try:
-            event_datetime = datetime.strptime(f"{self.date_input.value} {self.time_input.value}", "%d.%m.%Y %H:%M")
-        except ValueError:
-            await interaction.response.send_message('❌ Некорректная дата или время.', ephemeral=True)
-            return
+            if not ANNOUNCE_CHANNEL_ID:
+                await interaction.response.send_message('❌ Канал для объявлений не настроен.', ephemeral=True)
+                return
+            if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', self.date_input.value):
+                await interaction.response.send_message('❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ', ephemeral=True)
+                return
+            if not re.match(r'^\d{2}:\d{2}$', self.time_input.value):
+                await interaction.response.send_message('❌ Неверный формат времени. Используйте ЧЧ:ММ', ephemeral=True)
+                return
+            try:
+                event_datetime = datetime.strptime(f"{self.date_input.value} {self.time_input.value}", "%d.%m.%Y %H:%M")
+            except ValueError:
+                await interaction.response.send_message('❌ Некорректная дата или время.', ephemeral=True)
+                return
 
-        event_id = f"{int(datetime.now().timestamp())}"
-        events[event_id] = {
-            'title': self.title_input.value,
-            'date': self.date_input.value,
-            'time': self.time_input.value,
-            'datetime': event_datetime.isoformat(),
-            'participants': set(),
-            'non_participants': set(),
-            'message_id': None,
-            'channel_id': ANNOUNCE_CHANNEL_ID,
-            'reminded': False
-        }
-        save_events(events)
+            event_id = f"{int(datetime.now().timestamp())}"
+            events[event_id] = {
+                'title': self.title_input.value,
+                'date': self.date_input.value,
+                'time': self.time_input.value,
+                'datetime': event_datetime.isoformat(),
+                'participants': set(),
+                'non_participants': set(),
+                'message_id': None,
+                'channel_id': ANNOUNCE_CHANNEL_ID,
+                'reminded': False
+            }
+            save_events(events)
 
-        embed = discord.Embed(
-            title=f"📅 {self.title_input.value}",
-            description=f"**Дата:** {self.date_input.value}\n**Время:** {self.time_input.value} (МСК)",
-            color=discord.Color.gold()
-        )
-        embed.add_field(name="✅ Участники", value="Пока никого", inline=True)
-        embed.add_field(name="❌ Не смогут", value="Пока никого", inline=True)
-        embed.set_footer(text=f"ID события: {event_id}")
+            embed = discord.Embed(
+                title=f"📅 {self.title_input.value}",
+                description=f"**Дата:** {self.date_input.value}\n**Время:** {self.time_input.value} (МСК)",
+                color=discord.Color.gold()
+            )
+            embed.add_field(name="✅ Участники", value="Пока никого", inline=True)
+            embed.add_field(name="❌ Не смогут", value="Пока никого", inline=True)
+            embed.set_footer(text=f"ID события: {event_id}")
 
-        channel = interaction.guild.get_channel(ANNOUNCE_CHANNEL_ID)
-        if not channel:
-            await interaction.response.send_message('❌ Канал объявлений не найден.', ephemeral=True)
-            return
+            channel = interaction.guild.get_channel(ANNOUNCE_CHANNEL_ID)
+            if not channel:
+                await interaction.response.send_message('❌ Канал объявлений не найден.', ephemeral=True)
+                return
 
-        view = EventActionButtons(event_id)
-        content = "@everyone" if PING_EVERYONE else None
-        msg = await channel.send(content=content, embed=embed, view=view)
-        events[event_id]['message_id'] = msg.id
-        save_events(events)
+            view = EventActionButtons(event_id)
+            content = "@everyone" if PING_EVERYONE else None
+            msg = await channel.send(content=content, embed=embed, view=view)
+            events[event_id]['message_id'] = msg.id
+            save_events(events)
 
-        await interaction.response.send_message(f'✅ Смежка создана! Объявление отправлено в канал {channel.mention}', ephemeral=True)
+            await interaction.response.send_message(f'✅ Смежка создана! Объявление отправлено в канал {channel.mention}', ephemeral=True)
+        except Exception as e:
+            print(f"[ERROR] Ошибка в on_submit: {e}")
+            await interaction.response.send_message(f'❌ Произошла ошибка: {e}', ephemeral=True)
 
 class EventActionButtons(ui.View):
     def __init__(self, event_id):
@@ -106,46 +110,30 @@ class EventActionButtons(ui.View):
         await self._update_event(interaction, 'leave')
 
     async def _update_event(self, interaction: discord.Interaction, action: str):
-        # Откладываем ответ, чтобы успеть обработать
         await interaction.response.defer(ephemeral=True)
-
-        print(f"[LOG] Обновление события {self.event_id}, действие: {action}")
-
         event = events.get(self.event_id)
         if not event:
-            print(f"[ERROR] Событие {self.event_id} не найдено")
             await interaction.followup.send('❌ Событие не найдено.', ephemeral=True)
             return
 
         user_id = interaction.user.id
-        print(f"[LOG] Пользователь {interaction.user.display_name} (ID: {user_id})")
-
         if action == 'join':
             if user_id in event['non_participants']:
                 event['non_participants'].remove(user_id)
-                print(f"[LOG] Удалён из 'не смогут'")
             if user_id in event['participants']:
                 event['participants'].remove(user_id)
-                print(f"[LOG] Удалён из 'участники' (повторный отказ)")
             else:
                 event['participants'].add(user_id)
-                print(f"[LOG] Добавлен в 'участники'")
-        else:  # leave
+        else:
             if user_id in event['participants']:
                 event['participants'].remove(user_id)
-                print(f"[LOG] Удалён из 'участники'")
             if user_id in event['non_participants']:
                 event['non_participants'].remove(user_id)
-                print(f"[LOG] Удалён из 'не смогут' (повторный отказ)")
             else:
                 event['non_participants'].add(user_id)
-                print(f"[LOG] Добавлен в 'не смогут'")
 
         save_events(events)
-        print(f"[LOG] Текущие участники: {event['participants']}")
-        print(f"[LOG] Текущие не участники: {event['non_participants']}")
 
-        # Формируем embed
         embed = discord.Embed(
             title=f"📅 {event['title']}",
             description=f"**Дата:** {event['date']}\n**Время:** {event['time']} (МСК)",
@@ -174,24 +162,18 @@ class EventActionButtons(ui.View):
         )
         embed.set_footer(text=f"ID события: {self.event_id}")
 
-        # Создаём новый View для обновления
         new_view = EventActionButtons(self.event_id)
-
         channel = interaction.guild.get_channel(event['channel_id'])
         if not channel:
-            print(f"[ERROR] Канал {event['channel_id']} не найден")
             await interaction.followup.send('❌ Канал не найден.', ephemeral=True)
             return
 
         try:
             msg = await channel.fetch_message(event['message_id'])
-            print(f"[LOG] Найдено сообщение {msg.id}, редактируем...")
             await msg.edit(embed=embed, view=new_view)
-            print(f"[LOG] Сообщение успешно обновлено")
             await interaction.followup.send('✅ Список обновлён!', ephemeral=True)
         except discord.NotFound:
-            print(f"[ERROR] Сообщение {event['message_id']} не найдено")
-            await interaction.followup.send('❌ Сообщение с событием не найдено. Возможно, оно было удалено.', ephemeral=True)
+            await interaction.followup.send('❌ Сообщение с событием не найдено.', ephemeral=True)
         except Exception as e:
             print(f"[ERROR] Ошибка редактирования: {e}")
             await interaction.followup.send(f'❌ Ошибка обновления: {e}', ephemeral=True)
@@ -202,7 +184,14 @@ class CreateEventButton(ui.View):
 
     @ui.button(label='➕ Создать смежку', style=discord.ButtonStyle.primary, custom_id='create_event_button')
     async def create_button(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_modal(CreateEventModal())
+        try:
+            print(f"[LOG] Нажата кнопка создания смежки от {interaction.user.display_name}")
+            modal = CreateEventModal()
+            await interaction.response.send_modal(modal)
+            print("[LOG] Модальное окно отправлено успешно")
+        except Exception as e:
+            print(f"[ERROR] Ошибка при создании модального окна: {e}")
+            await interaction.response.send_message(f"❌ Ошибка: {e}", ephemeral=True)
 
 async def setup_event_button(bot):
     if not EVENT_CHANNEL_ID:
