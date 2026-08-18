@@ -7,9 +7,8 @@ import event_manager
 
 intents = discord.Intents.default()
 intents.message_content = True
-# Включаем интенты для реакций
 intents.reactions = True
-intents.members = True  # чтобы получать информацию о пользователях
+intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 monitor_message = None
@@ -17,7 +16,7 @@ monitor_message = None
 @bot.event
 async def on_ready():
     print(f'🛡️ Бот {bot.user.name} успешно запущен и готов к работе!')
-    # Регистрируем обработчики реакций из event_manager
+    # Регистрируем обработчики реакций
     bot.add_listener(event_manager.on_reaction_add, 'on_reaction_add')
     bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
     # Синхронизируем существующие события
