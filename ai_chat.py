@@ -88,10 +88,7 @@ async def ask_deepseek(prompt: str, history: list = None) -> str:
                     error_data = await resp.json()
                     error_msg = error_data.get("error", {}).get("message", "Неизвестная ошибка")
                     if resp.status == 402:
-                        return (
-                            "💳 **Недостаточно средств на аккаунте DeepSeek.**\n"
-                            "Пополните баланс: https://platform.deepseek.com/balance"
-                        )
+                        return "💳 **Недостаточно средств на аккаунте DeepSeek.**\nПополните баланс: https://platform.deepseek.com/balance"
                     return f"❌ Ошибка API DeepSeek {resp.status}: {error_msg}"
                 data = await resp.json()
                 return data["choices"][0]["message"]["content"].strip()
@@ -106,7 +103,6 @@ async def on_ai_message(message, bot):
 
     content = message.content
     is_mentioned = bot.user.mentioned_in(message)
-
     ucheniy_match = re.match(r'^уч[её]ный\s+', content, re.IGNORECASE)
 
     if ucheniy_match or is_mentioned:
