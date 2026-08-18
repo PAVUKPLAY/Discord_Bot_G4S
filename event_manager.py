@@ -195,7 +195,6 @@ async def setup_event_button(bot):
     await channel.send(embed=embed, view=view)
     print("✅ Постоянная кнопка 'Создать смежку' размещена.")
 
-# Новая функция для принудительной очистки и пересоздания кнопки
 async def cleanup_event_button(bot):
     if not EVENT_CHANNEL_ID:
         print("⚠️ EVENT_CHANNEL_ID не задан. Пропускаем очистку.")
@@ -218,7 +217,6 @@ async def cleanup_event_button(bot):
                         print(f"✅ Удалено сообщение {msg.id}")
                         break
 
-    # Теперь создаём новое сообщение с кнопкой
     await setup_event_button(bot)
 
 async def reminder_task(bot):
@@ -244,7 +242,6 @@ async def reminder_task(bot):
                     save_events(events)
         await asyncio.sleep(60)
 
-# Обработчики реакций
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
