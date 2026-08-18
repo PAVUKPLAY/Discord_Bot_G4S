@@ -148,7 +148,10 @@ class CreateEventButton(ui.View):
             print("[LOG] Модальное окно отправлено успешно")
         except Exception as e:
             print(f"[ERROR] Ошибка при создании модального окна: {e}")
-            await interaction.response.send_message(f"❌ Ошибка: {e}", ephemeral=True)
+            try:
+                await interaction.response.send_message(f"❌ Ошибка: {e}", ephemeral=True)
+            except discord.errors.InteractionResponded:
+                await interaction.followup.send(f"❌ Ошибка: {e}", ephemeral=True)
 
 async def setup_event_button(bot):
     if not EVENT_CHANNEL_ID:
@@ -191,6 +194,32 @@ async def setup_event_button(bot):
     view = CreateEventButton()
     await channel.send(embed=embed, view=view)
     print("✅ Постоянная кнопка 'Создать смежку' размещена.")
+
+# Новая функция для принудительной очистки и пересоздания кнопки
+async def cleanup_event_button(bot):
+    if not EVENT_CHANNEL_ID:
+        print("⚠️ EVENT_CHANNEL_ID не задан. Пропускаем очистку.")
+        return
+    channel = bot.get_channel(EVENT_CHANNEL_ID)
+    if not channel:
+        try:
+            channel = await bot.fetch_channel(EVENT_CHANNEL_ID)
+        except Exception as e:
+            print(f"❌ Не удалось найти канал с ID {EVENT_CHANNEL_ID}: {e}")
+            return
+
+    print("🧹 Удаляем старые сообщения с кнопкой...")
+    async for msg in channel.history(limit=100):
+        if msg.author == bot.user and msg.components:
+            for row in msg.components:
+                for comp in row.children:
+                    if hasattr(comp, 'custom_id') and comp.custom_id == 'create_event_button':
+                        await msg.delete()
+                        print(f"✅ Удалено сообщение {msg.id}")
+                        break
+
+    # Теперь создаём новое сообщение с кнопкой
+    await setup_event_button(bot)
 
 async def reminder_task(bot):
     await bot.wait_until_ready()
