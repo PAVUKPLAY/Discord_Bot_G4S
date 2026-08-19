@@ -11,7 +11,8 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+# 🔁 Изменён префикс на '/'
+bot = commands.Bot(command_prefix='/', intents=intents)
 bot.remove_command('help')
 
 monitor_message = None
@@ -42,18 +43,18 @@ async def help_command(ctx):
     embed.add_field(
         name="📝 Цитатник",
         value=(
-            "Доступные команды:\n"
-            "`!цитата` – случайная цитата\n"
-            "`!цитаты [ник]` – цитаты пользователя\n"
-            "`!добавить` – в ответ на сообщение, чтобы добавить его как цитату\n"
-            "`!добавить <текст>` – добавить цитату вручную (автор – вы)\n"
-            "`!удалить_цитату <id>` – удалить цитату (только для модераторов)"
+            "Доступные команды (все с префиксом `/`):\n"
+            "`/цитата` – случайная цитата\n"
+            "`/цитаты [ник]` – цитаты пользователя\n"
+            "`/добавить` – в ответ на сообщение, чтобы добавить его как цитату\n"
+            "`/добавить <текст>` – добавить цитату вручную (автор – вы)\n"
+            "`/удалить_цитату <id>` – удалить цитату (только для модераторов)"
         ),
         inline=False
     )
     embed.add_field(
         name="❓ Эта справка",
-        value="Используйте **`!help`** в любом канале.",
+        value="Используйте **`/help`** в любом канале.",
         inline=False
     )
     embed.set_footer(text="G4S Сподручный • v1.0")
@@ -73,7 +74,7 @@ async def help_command(ctx):
 async def random_quote(ctx):
     quote = await quotes_manager.get_random_quote()
     if not quote:
-        await ctx.send("📭 Цитат пока нет. Добавьте первую с помощью `!добавить`.")
+        await ctx.send("📭 Цитат пока нет. Добавьте первую с помощью `/добавить`.")
         return
     embed = discord.Embed(
         title="📜 Случайная цитата",
@@ -107,11 +108,6 @@ async def user_quotes(ctx, *, user: discord.User = None):
 
 @bot.command(name='добавить', aliases=['добавить_цитату'])
 async def add_quote_cmd(ctx, *, text: str = None):
-    """
-    Добавляет цитату.
-    Если команда вызвана в ответ на сообщение (без текста) – берётся текст того сообщения и его автор.
-    Если указан текст – добавляется этот текст, автором считается автор команды.
-    """
     ref = ctx.message.reference
     if ref is not None:
         try:
@@ -143,7 +139,7 @@ async def add_quote_cmd(ctx, *, text: str = None):
         return
 
     await ctx.send(
-        "❌ Чтобы добавить цитату, либо ответьте на сообщение и напишите `!добавить`, либо укажите текст: `!добавить <текст>`.",
+        "❌ Чтобы добавить цитату, либо ответьте на сообщение и напишите `/добавить`, либо укажите текст: `/добавить <текст>`.",
         delete_after=15
     )
 
@@ -188,9 +184,11 @@ async def update_status_task():
 async def on_message(message):
     if message.author == bot.user:
         return
-    if message.content.startswith('!'):
+    # 🔁 Обрабатываем сообщения, начинающиеся с '/', как команды
+    if message.content.startswith('/'):
         await bot.process_commands(message)
         return
+    # Иначе передаём AI-обработчику
     await on_ai_message(message, bot)
 
 if __name__ == "__main__":
