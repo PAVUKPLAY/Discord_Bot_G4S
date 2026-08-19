@@ -112,7 +112,6 @@ async def on_ai_message(message, bot):
     if message.author == bot.user:
         return
 
-    # Проверяем, включён ли AI
     if not get_status("ai_enabled", True):
         return  # просто игнорируем, чтобы не спамить
 
