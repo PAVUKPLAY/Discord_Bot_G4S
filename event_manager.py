@@ -5,7 +5,10 @@ from datetime import datetime
 import json
 import os
 import asyncio
+import logging
 from config import EVENT_CHANNEL_ID, ANNOUNCE_CHANNEL_ID, PING_EVERYONE
+
+logger = logging.getLogger(__name__)
 
 DATA_FILE = "events_data.json"
 
@@ -17,8 +20,10 @@ def load_events():
                 for eid, ev in data.items():
                     ev['participants'] = set(ev['participants'])
                     ev['non_participants'] = set(ev['non_participants'])
+                logger.info(f"Загружено {len(data)} событий")
                 return data
-            except:
+            except Exception as e:
+                logger.error(f"Ошибка загрузки событий: {e}")
                 return {}
     return {}
 
@@ -36,6 +41,7 @@ events = load_events()
 async def update_event_embed(message, event_id):
     event = events.get(event_id)
     if not event:
+        logger.warning(f"Попытка обновить несуществующее событие {event_id}")
         return
 
     embed = discord.Embed(
@@ -70,6 +76,7 @@ async def update_event_embed(message, event_id):
     embed.set_footer(text=f"ID события: {event_id}")
 
     await message.edit(embed=embed)
+    logger.debug(f"Обновлён embed события {event_id}")
 
 class CreateEventModal(ui.Modal, title='Создание смежки'):
     title_input = ui.TextInput(label='Название смежки', placeholder='Например: Отрядная операция', default='Отрядная смежка')
@@ -80,6 +87,7 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
         try:
             if not ANNOUNCE_CHANNEL_ID:
                 await interaction.response.send_message('❌ Канал для объявлений не настроен.', ephemeral=True)
+                logger.error("Попытка создать смежку без ANNOUNCE_CHANNEL_ID")
                 return
             if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', self.date_input.value):
                 await interaction.response.send_message('❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ', ephemeral=True)
@@ -120,6 +128,7 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             channel = interaction.guild.get_channel(ANNOUNCE_CHANNEL_ID)
             if not channel:
                 await interaction.response.send_message('❌ Канал объявлений не найден.', ephemeral=True)
+                logger.error(f"Канал {ANNOUNCE_CHANNEL_ID} не найден для события {event_id}")
                 return
 
             content = "@everyone" if PING_EVERYONE else None
@@ -131,8 +140,9 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             await msg.add_reaction('❌')
 
             await interaction.response.send_message(f'✅ Смежка создана! Объявление отправлено в канал {channel.mention}', ephemeral=True)
+            logger.info(f"Создано событие {event_id} пользователем {interaction.user} (дата {self.date_input.value} {self.time_input.value})")
         except Exception as e:
-            print(f"[ERROR] Ошибка в on_submit: {e}")
+            logger.error(f"Ошибка в on_submit: {e}")
             await interaction.response.send_message(f'❌ Произошла ошибка: {e}', ephemeral=True)
 
 class CreateEventButton(ui.View):
@@ -142,12 +152,12 @@ class CreateEventButton(ui.View):
     @ui.button(label='➕ Создать смежку', style=discord.ButtonStyle.primary, custom_id='create_event_button')
     async def create_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            print(f"[LOG] Нажата кнопка создания смежки от {interaction.user.display_name}")
+            logger.info(f"Нажата кнопка создания смежки от {interaction.user.display_name}")
             modal = CreateEventModal()
             await interaction.response.send_modal(modal)
-            print("[LOG] Модальное окно отправлено успешно")
+            logger.debug("Модальное окно отправлено успешно")
         except Exception as e:
-            print(f"[ERROR] Ошибка при создании модального окна: {e}")
+            logger.error(f"Ошибка при создании модального окна: {e}")
             try:
                 await interaction.response.send_message(f"❌ Ошибка: {e}", ephemeral=True)
             except discord.errors.InteractionResponded:
@@ -155,7 +165,7 @@ class CreateEventButton(ui.View):
 
 async def setup_event_button(bot):
     if not EVENT_CHANNEL_ID:
-        print("⚠️ EVENT_CHANNEL_ID не задан. Кнопка не создана.")
+        logger.warning("EVENT_CHANNEL_ID не задан. Кнопка не создана.")
         return
 
     channel = bot.get_channel(EVENT_CHANNEL_ID)
@@ -163,10 +173,10 @@ async def setup_event_button(bot):
         try:
             channel = await bot.fetch_channel(EVENT_CHANNEL_ID)
         except Exception as e:
-            print(f"❌ Не удалось найти канал с ID {EVENT_CHANNEL_ID}: {e}")
+            logger.error(f"Не удалось найти канал с ID {EVENT_CHANNEL_ID}: {e}")
             return
 
-    print(f"🔍 Проверяем канал {channel.name} (ID: {channel.id}) на наличие кнопки...")
+    logger.info(f"Проверяем канал {channel.name} (ID: {channel.id}) на наличие кнопки...")
 
     found = False
     async for msg in channel.history(limit=30):
@@ -175,7 +185,7 @@ async def setup_event_button(bot):
                 for comp in row.children:
                     if hasattr(comp, 'custom_id') and comp.custom_id == 'create_event_button':
                         found = True
-                        print(f"✅ Найдено существующее сообщение с кнопкой (ID: {msg.id})")
+                        logger.info(f"Найдено существующее сообщение с кнопкой (ID: {msg.id})")
                         break
                 if found:
                     break
@@ -185,7 +195,7 @@ async def setup_event_button(bot):
     if found:
         return
 
-    print("📤 Отправляем новое сообщение с кнопкой...")
+    logger.info("Отправляем новое сообщение с кнопкой...")
     embed = discord.Embed(
         title="📢 Создание смежки",
         description="Нажмите на кнопку ниже, чтобы создать новое событие для отряда.",
@@ -193,28 +203,28 @@ async def setup_event_button(bot):
     )
     view = CreateEventButton()
     await channel.send(embed=embed, view=view)
-    print("✅ Постоянная кнопка 'Создать смежку' размещена.")
+    logger.info("Постоянная кнопка 'Создать смежку' размещена.")
 
 async def cleanup_event_button(bot):
     if not EVENT_CHANNEL_ID:
-        print("⚠️ EVENT_CHANNEL_ID не задан. Пропускаем очистку.")
+        logger.warning("EVENT_CHANNEL_ID не задан. Пропускаем очистку.")
         return
     channel = bot.get_channel(EVENT_CHANNEL_ID)
     if not channel:
         try:
             channel = await bot.fetch_channel(EVENT_CHANNEL_ID)
         except Exception as e:
-            print(f"❌ Не удалось найти канал с ID {EVENT_CHANNEL_ID}: {e}")
+            logger.error(f"Не удалось найти канал с ID {EVENT_CHANNEL_ID}: {e}")
             return
 
-    print("🧹 Удаляем старые сообщения с кнопкой...")
+    logger.info("Удаляем старые сообщения с кнопкой...")
     async for msg in channel.history(limit=100):
         if msg.author == bot.user and msg.components:
             for row in msg.components:
                 for comp in row.children:
                     if hasattr(comp, 'custom_id') and comp.custom_id == 'create_event_button':
                         await msg.delete()
-                        print(f"✅ Удалено сообщение {msg.id}")
+                        logger.info(f"Удалено сообщение {msg.id}")
                         break
 
     await setup_event_button(bot)
@@ -240,6 +250,7 @@ async def reminder_task(bot):
                     await channel.send(content=content, embed=embed)
                     event['reminded'] = True
                     save_events(events)
+                    logger.info(f"Отправлено напоминание о событии {eid}")
         await asyncio.sleep(60)
 
 async def on_reaction_add(reaction, user):
@@ -267,6 +278,7 @@ async def on_reaction_add(reaction, user):
 
     save_events(events)
     await update_event_embed(reaction.message, event_id)
+    logger.info(f"Пользователь {user.display_name} {reaction.emoji} на событие {event_id}")
 
 async def on_reaction_remove(reaction, user):
     if user.bot:
@@ -289,6 +301,7 @@ async def on_reaction_remove(reaction, user):
 
     save_events(events)
     await update_event_embed(reaction.message, event_id)
+    logger.info(f"Пользователь {user.display_name} убрал {reaction.emoji} с события {event_id}")
 
 async def sync_events(bot):
     for eid, event in events.items():
@@ -298,5 +311,6 @@ async def sync_events(bot):
         try:
             msg = await channel.fetch_message(event['message_id'])
             await update_event_embed(msg, eid)
+            logger.debug(f"Синхронизировано событие {eid}")
         except Exception as e:
-            print(f"[WARN] Не удалось синхронизировать событие {eid}: {e}")
+            logger.warning(f"Не удалось синхронизировать событие {eid}: {e}")
