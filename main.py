@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 from config import DISCORD_TOKEN
 from arma_monitor import update_status, cleanup_monitor
 from ai_chat import on_ai_message
@@ -11,20 +12,14 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 
-# 🔁 Изменён префикс на '/'
 bot = commands.Bot(command_prefix='/', intents=intents)
 bot.remove_command('help')
 
 monitor_message = None
 
-# ==================== КОМАНДА HELP ====================
-@bot.command(name='help')
-async def help_command(ctx):
-    try:
-        await ctx.message.delete()
-    except:
-        pass
-
+# ==================== СЛЕШ-КОМАНДА HELP ====================
+@bot.tree.command(name='help', description='Показать справку по боту')
+async def slash_help(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🛡️ Справка по боту G4S Сподручный",
         description="Вот что я умею:",
@@ -59,22 +54,18 @@ async def help_command(ctx):
     )
     embed.set_footer(text="G4S Сподручный • v1.0")
 
-    try:
-        await ctx.author.send(embed=embed)
-    except discord.Forbidden:
-        await ctx.send(
-            f"{ctx.author.mention}, ваши ЛС закрыты. Включите их, чтобы получить справку.",
-            delete_after=15
-        )
-    except Exception as e:
-        await ctx.send(f"❌ Не удалось отправить справку: {e}", delete_after=10)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ==================== КОМАНДЫ ЦИТАТНИКА ====================
+# ==================== ПРЕФИКСНЫЕ КОМАНДЫ (с удалением сообщения) ====================
 @bot.command(name='цитата')
 async def random_quote(ctx):
+    try:
+        await ctx.message.delete()
+    except:
+        pass
     quote = await quotes_manager.get_random_quote()
     if not quote:
-        await ctx.send("📭 Цитат пока нет. Добавьте первую с помощью `/добавить`.")
+        await ctx.send("📭 Цитат пока нет. Добавьте первую с помощью `/добавить`.", delete_after=10)
         return
     embed = discord.Embed(
         title="📜 Случайная цитата",
@@ -86,11 +77,15 @@ async def random_quote(ctx):
 
 @bot.command(name='цитаты')
 async def user_quotes(ctx, *, user: discord.User = None):
+    try:
+        await ctx.message.delete()
+    except:
+        pass
     if user is None:
         user = ctx.author
     quotes = await quotes_manager.get_user_quotes(user.id)
     if not quotes:
-        await ctx.send(f"📭 У пользователя {user.display_name} нет цитат.")
+        await ctx.send(f"📭 У пользователя {user.display_name} нет цитат.", delete_after=10)
         return
     embed = discord.Embed(
         title=f"📜 Цитаты {user.display_name}",
@@ -108,6 +103,10 @@ async def user_quotes(ctx, *, user: discord.User = None):
 
 @bot.command(name='добавить', aliases=['добавить_цитату'])
 async def add_quote_cmd(ctx, *, text: str = None):
+    try:
+        await ctx.message.delete()
+    except:
+        pass
     ref = ctx.message.reference
     if ref is not None:
         try:
@@ -145,6 +144,10 @@ async def add_quote_cmd(ctx, *, text: str = None):
 
 @bot.command(name='удалить_цитату')
 async def remove_quote_cmd(ctx, quote_id: int):
+    try:
+        await ctx.message.delete()
+    except:
+        pass
     if not ctx.author.guild_permissions.manage_messages:
         await ctx.send("❌ У вас недостаточно прав для удаления цитаты.", delete_after=10)
         return
@@ -160,6 +163,12 @@ async def remove_quote_cmd(ctx, quote_id: int):
 async def on_ready():
     global monitor_message
     print(f'🛡️ Бот {bot.user.name} успешно запущен и готов к работе!')
+    # Синхронизация слеш-команд
+    try:
+        await bot.tree.sync()
+        print("✅ Слеш-команды синхронизированы")
+    except Exception as e:
+        print(f"❌ Ошибка синхронизации слеш-команд: {e}")
 
     bot.add_listener(event_manager.on_reaction_add, 'on_reaction_add')
     bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
@@ -184,11 +193,9 @@ async def update_status_task():
 async def on_message(message):
     if message.author == bot.user:
         return
-    # 🔁 Обрабатываем сообщения, начинающиеся с '/', как команды
     if message.content.startswith('/'):
         await bot.process_commands(message)
         return
-    # Иначе передаём AI-обработчику
     await on_ai_message(message, bot)
 
 if __name__ == "__main__":
