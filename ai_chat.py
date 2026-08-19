@@ -1,7 +1,10 @@
 import re
 import asyncio
 import aiohttp
+import logging
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL
+
+logger = logging.getLogger(__name__)
 
 contexts = {}
 MAX_HISTORY_LENGTH = 10
@@ -62,6 +65,7 @@ async def send_long_answer(destination, text):
 
 async def ask_deepseek(prompt: str, history: list = None) -> str:
     if not DEEPSEEK_API_KEY:
+        logger.error("Попытка вызова AI без API-ключа")
         return "⚠️ API-ключ DeepSeek не настроен. Обратитесь к администратору."
     if history is None:
         history = []
@@ -88,13 +92,19 @@ async def ask_deepseek(prompt: str, history: list = None) -> str:
                     error_data = await resp.json()
                     error_msg = error_data.get("error", {}).get("message", "Неизвестная ошибка")
                     if resp.status == 402:
+                        logger.warning("Недостаточно средств на балансе DeepSeek")
                         return "💳 **Недостаточно средств на аккаунте DeepSeek.**\nПополните баланс: https://platform.deepseek.com/balance"
+                    logger.error(f"Ошибка API DeepSeek {resp.status}: {error_msg}")
                     return f"❌ Ошибка API DeepSeek {resp.status}: {error_msg}"
                 data = await resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+                reply = data["choices"][0]["message"]["content"].strip()
+                logger.info(f"Успешный запрос к DeepSeek, длина ответа {len(reply)} символов")
+                return reply
         except asyncio.TimeoutError:
+            logger.error("Таймаут запроса к DeepSeek")
             return "⏰ DeepSeek не ответил вовремя."
         except Exception as e:
+            logger.error(f"Ошибка при запросе к DeepSeek: {e}")
             return f"⚠️ Ошибка: {str(e)}"
 
 async def on_ai_message(message, bot):
@@ -116,6 +126,7 @@ async def on_ai_message(message, bot):
                 return
 
         if question:
+            logger.info(f"AI-запрос от {message.author}: {question[:50]}...")
             async with message.channel.typing():
                 user_id = message.author.id
                 history = contexts.get(user_id, [])
