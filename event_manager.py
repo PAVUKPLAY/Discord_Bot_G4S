@@ -6,7 +6,6 @@ import json
 import os
 import asyncio
 import logging
-import sys  # для перезапуска
 from config import EVENT_CHANNEL_ID, ANNOUNCE_CHANNEL_ID, PING_EVERYONE
 from toggle_manager import get_status, set_status
 from utils import has_moderator_role
@@ -338,8 +337,8 @@ class RestartConfirmModal(ui.Modal, title='Подтверждение перез
             logger.info(f"Бот перезапущен пользователем {interaction.user}")
             # Сохраняем все данные перед выходом
             save_events(events)
-            # Завершаем процесс – хостинг автоматически перезапустит бота
-            sys.exit(0)
+            # Немедленное завершение процесса без генерации исключения
+            os._exit(0)
         else:
             await interaction.response.send_message("❌ Перезапуск отменён.", ephemeral=True)
 
