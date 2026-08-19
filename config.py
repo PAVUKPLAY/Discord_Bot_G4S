@@ -16,7 +16,7 @@ if not DISCORD_TOKEN:
 if not TARGET_CHANNEL_ID:
     raise ValueError("TARGET_CHANNEL_ID не задан!")
 if not EVENT_CHANNEL_ID:
-    print("⚠️ EVENT_CHANNEL_ID не задан. Функция создания смежек отключена.")
+    print("⚠️ EVENT_CHANNEL_ID не задан. Функция управления отключена.")
 if not ANNOUNCE_CHANNEL_ID:
     print("⚠️ ANNOUNCE_CHANNEL_ID не задан. Объявления о смежках не будут отправляться.")
 
