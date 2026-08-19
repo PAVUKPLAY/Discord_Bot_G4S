@@ -11,6 +11,9 @@ EVENT_CHANNEL_ID = os.getenv('EVENT_CHANNEL_ID')
 ANNOUNCE_CHANNEL_ID = os.getenv('ANNOUNCE_CHANNEL_ID')
 PING_EVERYONE = os.getenv('PING_EVERYONE', 'True') == 'True'
 
+# Роли модераторов (через запятую)
+MODERATOR_ROLE_IDS = [int(x) for x in os.getenv('MODERATOR_ROLE_IDS', '').split(',') if x.strip().isdigit()]
+
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN не задан!")
 if not TARGET_CHANNEL_ID:
