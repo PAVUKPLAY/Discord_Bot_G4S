@@ -4,7 +4,7 @@ from discord import app_commands
 import logging
 from config import DISCORD_TOKEN
 from arma_monitor import update_status, cleanup_monitor
-from ai_chat import on_ai_message
+from ai_chat import on_ai_message, clear_history
 import event_manager
 import quotes_manager
 
@@ -36,7 +36,10 @@ async def slash_help(interaction: discord.Interaction):
     )
     embed.add_field(
         name="🤖 AI-чат",
-        value="Напишите **`Ученый <вопрос>`** или **`Учёный <вопрос>`**, или просто упомяните меня, чтобы задать вопрос.",
+        value=(
+            "Напишите **`Ученый <вопрос>`** или **`Учёный <вопрос>`**, или просто упомяните меня, чтобы задать вопрос.\n"
+            "Для очистки истории диалога используйте **`/очистить`** (или `/clear`)."
+        ),
         inline=False
     )
     embed.add_field(
@@ -181,6 +184,22 @@ async def remove_quote_cmd(ctx, quote_id: int):
     else:
         await ctx.send(f"❌ Цитата с ID {quote_id} не найдена.")
         logger.warning(f"Попытка удалить несуществующую цитату ID {quote_id} пользователем {ctx.author}")
+
+# ==================== НОВАЯ КОМАНДА ДЛЯ ОЧИСТКИ ИСТОРИИ AI ====================
+@bot.command(name='очистить', aliases=['clear'])
+async def clear_history_cmd(ctx):
+    try:
+        await ctx.message.delete()
+    except:
+        pass
+    user_id = ctx.author.id
+    success = await clear_history(user_id)
+    if success:
+        await ctx.send("🧹 Ваша история диалога с AI очищена.", delete_after=10)
+        logger.info(f"Пользователь {ctx.author} очистил свою AI-историю")
+    else:
+        await ctx.send("📭 У вас не было сохранённой истории диалога.", delete_after=10)
+        logger.info(f"Пользователь {ctx.author} попытался очистить историю, но её не было")
 
 # ==================== СОБЫТИЯ И ЗАДАЧИ ====================
 @bot.event
