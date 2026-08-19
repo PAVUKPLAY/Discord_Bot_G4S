@@ -2,7 +2,10 @@ import a2s
 import re
 import discord
 from datetime import datetime, timezone
+import logging
 from config import SERVER_IP, SERVER_PORT, TARGET_CHANNEL_ID, ALLOWED_TAGS
+
+logger = logging.getLogger(__name__)
 
 def get_load_bar(current, max_val):
     if max_val <= 0:
@@ -90,7 +93,7 @@ async def update_status(bot, monitor_message):
             try:
                 channel = await bot.fetch_channel(TARGET_CHANNEL_ID)
             except Exception as e:
-                print(f"Не удалось найти канал с ID {TARGET_CHANNEL_ID}: {e}")
+                logger.error(f"Не удалось найти канал с ID {TARGET_CHANNEL_ID}: {e}")
                 return monitor_message
 
         current_unix_time = int(datetime.now(timezone.utc).timestamp())
@@ -115,7 +118,7 @@ async def update_status(bot, monitor_message):
             non_allowed_players = [p for p in all_names if p not in allowed_players]
 
         except Exception as e:
-            print(f"Ошибка получения данных от Arma 3: {e}")
+            logger.error(f"Ошибка получения данных от Arma 3: {e}")
             status_text = "🔴 НЕДОСТУПЕН"
             online_text = "0/0"
             load_bar = "░" * 10
@@ -188,19 +191,22 @@ async def update_status(bot, monitor_message):
             monitor_message = await channel.send(embed=embed)
 
         await bot.change_presence(activity=discord.Game(name=f"Онлайн: {online_text}"))
+        logger.debug(f"Мониторинг обновлён: {online_text}, карта {map_name if 'map_name' in locals() else 'unknown'}")
         return monitor_message
 
     except Exception as e:
-        print(f"Критическая ошибка в цикле автообновления: {e}")
+        logger.error(f"Критическая ошибка в цикле автообновления: {e}")
         return monitor_message
 
 async def cleanup_monitor(bot):
     channel = bot.get_channel(TARGET_CHANNEL_ID)
     if not channel:
+        logger.warning("Канал мониторинга не найден для очистки")
         return
     async for msg in channel.history(limit=100):
         if msg.author == bot.user and msg.embeds:
             for embed in msg.embeds:
                 if embed.title and "Мониторинг G4S" in embed.title:
                     await msg.delete()
+                    logger.info(f"Удалено старое сообщение мониторинга {msg.id}")
                     break
