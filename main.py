@@ -8,6 +8,7 @@ from ai_chat import on_ai_message, clear_history
 import event_manager
 import quotes_manager
 from toggle_manager import get_status
+from utils import has_moderator_role
 
 # Настройка логирования
 logging.basicConfig(
@@ -75,7 +76,6 @@ async def slash_help(interaction: discord.Interaction):
 # ==================== ПРЕФИКСНЫЕ КОМАНДЫ ====================
 @bot.command(name='цитата')
 async def random_quote(ctx):
-    # Проверяем, включён ли цитатник
     if not get_status("quotes_enabled", True):
         await ctx.send("📝 Цитатник в данный момент **выключен**. Включите его через панель управления.", delete_after=10)
         return
@@ -188,7 +188,8 @@ async def remove_quote_cmd(ctx, quote_id: int):
         await ctx.message.delete()
     except:
         pass
-    if not ctx.author.guild_permissions.manage_messages:
+    # Проверка прав через роли
+    if not has_moderator_role(ctx.author):
         await ctx.send("❌ У вас недостаточно прав для удаления цитаты.", delete_after=10)
         logger.warning(f"Пользователь {ctx.author} пытался удалить цитату без прав")
         return
@@ -237,7 +238,6 @@ async def on_ready():
     monitor_message = await update_status(bot, None)
 
     await event_manager.cleanup_event_button(bot)
-    # Создаём панель управления (вместо отдельной кнопки AI)
     await event_manager.setup_dashboard(bot)
 
     if not update_status_task.is_running():
