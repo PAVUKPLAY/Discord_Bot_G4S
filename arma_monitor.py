@@ -87,7 +87,6 @@ def chunk_player_list(players_list, style_type=None):
     return chunks
 
 async def update_status(bot, monitor_message):
-    # Проверяем, включён ли мониторинг
     if not get_status("monitor_enabled", True):
         logger.debug("Мониторинг отключён, обновление пропущено")
         return monitor_message
