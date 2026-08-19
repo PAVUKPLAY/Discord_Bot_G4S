@@ -3,6 +3,7 @@ import asyncio
 import aiohttp
 import logging
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL
+from toggle_manager import get_status
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,10 @@ async def on_ai_message(message, bot):
     if message.author == bot.user:
         return
 
+    # Проверяем, включён ли AI
+    if not get_status("ai_enabled", True):
+        return  # просто игнорируем, чтобы не спамить
+
     content = message.content
     is_mentioned = bot.user.mentioned_in(message)
     ucheniy_match = re.match(r'^уч[её]ный\s+', content, re.IGNORECASE)
@@ -138,7 +143,6 @@ async def on_ai_message(message, bot):
                 contexts[user_id] = history
                 await send_long_answer(message, answer)
 
-# Новая функция для очистки истории пользователя
 async def clear_history(user_id):
     if user_id in contexts:
         del contexts[user_id]
