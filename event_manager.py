@@ -6,7 +6,7 @@ import json
 import os
 import asyncio
 import logging
-import sys
+import sys  # для перезапуска
 from config import EVENT_CHANNEL_ID, ANNOUNCE_CHANNEL_ID, PING_EVERYONE
 from toggle_manager import get_status, set_status
 from utils import has_moderator_role
@@ -322,6 +322,27 @@ async def sync_events(bot):
         except Exception as e:
             logger.warning(f"Не удалось синхронизировать событие {eid}: {e}")
 
+# ==================== МОДАЛЬНОЕ ОКНО ПОДТВЕРЖДЕНИЯ РЕСТАРТА ====================
+class RestartConfirmModal(ui.Modal, title='Подтверждение перезапуска'):
+    confirm = ui.TextInput(
+        label='Введите "ДА" для подтверждения',
+        placeholder='ДА',
+        min_length=2,
+        max_length=2,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.confirm.value.upper() == 'ДА':
+            await interaction.response.send_message("🔄 Перезапуск бота...", ephemeral=True)
+            logger.info(f"Бот перезапущен пользователем {interaction.user}")
+            # Сохраняем все данные перед выходом
+            save_events(events)
+            # Завершаем процесс – хостинг автоматически перезапустит бота
+            sys.exit(0)
+        else:
+            await interaction.response.send_message("❌ Перезапуск отменён.", ephemeral=True)
+
 # ==================== ПАНЕЛЬ УПРАВЛЕНИЯ ====================
 class DashboardView(ui.View):
     def __init__(self):
@@ -343,7 +364,7 @@ class DashboardView(ui.View):
             button.callback = self.make_callback(feature)
             self.add_item(button)
 
-        # Кнопка перезапуска бота
+        # Кнопка перезапуска (всегда видна, но с проверкой прав внутри)
         restart_button = ui.Button(label="🔄 Перезапустить бота", style=discord.ButtonStyle.danger, custom_id="restart_bot")
         restart_button.callback = self.restart_callback
         self.add_item(restart_button)
@@ -373,11 +394,8 @@ class DashboardView(ui.View):
             await interaction.response.send_message("❌ У вас недостаточно прав для перезапуска бота.", ephemeral=True)
             logger.warning(f"Пользователь {interaction.user} пытался перезапустить бота без прав")
             return
-        await interaction.response.send_message("🔄 Бот перезапускается...", ephemeral=True)
-        logger.info(f"Бот перезапущен пользователем {interaction.user}")
-        await asyncio.sleep(1)
-        # Завершаем процесс с кодом 0 – хостинг перезапустит бота
-        sys.exit(0)
+        # Открываем модальное окно подтверждения
+        await interaction.response.send_modal(RestartConfirmModal())
 
 async def setup_dashboard(bot):
     if not EVENT_CHANNEL_ID:
