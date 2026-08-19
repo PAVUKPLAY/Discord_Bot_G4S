@@ -4,6 +4,7 @@ import discord
 from datetime import datetime, timezone
 import logging
 from config import SERVER_IP, SERVER_PORT, TARGET_CHANNEL_ID, ALLOWED_TAGS
+from toggle_manager import get_status
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,11 @@ def chunk_player_list(players_list, style_type=None):
     return chunks
 
 async def update_status(bot, monitor_message):
+    # Проверяем, включён ли мониторинг
+    if not get_status("monitor_enabled", True):
+        logger.debug("Мониторинг отключён, обновление пропущено")
+        return monitor_message
+
     try:
         await bot.wait_until_ready()
         channel = bot.get_channel(TARGET_CHANNEL_ID)
@@ -191,7 +197,7 @@ async def update_status(bot, monitor_message):
             monitor_message = await channel.send(embed=embed)
 
         await bot.change_presence(activity=discord.Game(name=f"Онлайн: {online_text}"))
-        logger.debug(f"Мониторинг обновлён: {online_text}, карта {map_name if 'map_name' in locals() else 'unknown'}")
+        logger.debug(f"Мониторинг обновлён: {online_text}")
         return monitor_message
 
     except Exception as e:
