@@ -1,11 +1,20 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
+import logging
 from config import DISCORD_TOKEN
 from arma_monitor import update_status, cleanup_monitor
 from ai_chat import on_ai_message
 import event_manager
 import quotes_manager
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -55,8 +64,9 @@ async def slash_help(interaction: discord.Interaction):
     embed.set_footer(text="G4S Сподручный • v1.0")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+    logger.info(f"Пользователь {interaction.user} запросил справку")
 
-# ==================== ПРЕФИКСНЫЕ КОМАНДЫ (с удалением сообщения) ====================
+# ==================== ПРЕФИКСНЫЕ КОМАНДЫ ====================
 @bot.command(name='цитата')
 async def random_quote(ctx):
     try:
@@ -66,6 +76,7 @@ async def random_quote(ctx):
     quote = await quotes_manager.get_random_quote()
     if not quote:
         await ctx.send("📭 Цитат пока нет. Добавьте первую с помощью `/добавить`.", delete_after=10)
+        logger.info(f"Запрос случайной цитаты от {ctx.author}: база пуста")
         return
     embed = discord.Embed(
         title="📜 Случайная цитата",
@@ -74,6 +85,7 @@ async def random_quote(ctx):
     )
     embed.set_footer(text=f"Автор: {quote['author_name']} • ID: {quote['id']}")
     await ctx.send(embed=embed)
+    logger.info(f"Пользователь {ctx.author} получил случайную цитату ID {quote['id']}")
 
 @bot.command(name='цитаты')
 async def user_quotes(ctx, *, user: discord.User = None):
@@ -86,6 +98,7 @@ async def user_quotes(ctx, *, user: discord.User = None):
     quotes = await quotes_manager.get_user_quotes(user.id)
     if not quotes:
         await ctx.send(f"📭 У пользователя {user.display_name} нет цитат.", delete_after=10)
+        logger.info(f"Запрос цитат пользователя {user.display_name} от {ctx.author}: нет цитат")
         return
     embed = discord.Embed(
         title=f"📜 Цитаты {user.display_name}",
@@ -100,6 +113,7 @@ async def user_quotes(ctx, *, user: discord.User = None):
     if len(quotes) > 10:
         embed.set_footer(text=f"Показано 10 из {len(quotes)} цитат.")
     await ctx.send(embed=embed)
+    logger.info(f"Пользователь {ctx.author} запросил цитаты {user.display_name} (всего {len(quotes)})")
 
 @bot.command(name='добавить', aliases=['добавить_цитату'])
 async def add_quote_cmd(ctx, *, text: str = None):
@@ -113,34 +127,41 @@ async def add_quote_cmd(ctx, *, text: str = None):
             replied_msg = await ctx.channel.fetch_message(ref.message_id)
         except discord.NotFound:
             await ctx.send("❌ Сообщение, на которое вы ответили, не найдено.", delete_after=10)
+            logger.error(f"Ошибка добавления цитаты: сообщение не найдено (пользователь {ctx.author})")
             return
         except Exception as e:
             await ctx.send(f"❌ Ошибка при получении сообщения: {e}", delete_after=10)
+            logger.error(f"Ошибка получения сообщения для цитаты: {e}")
             return
 
         quote_text = replied_msg.content
         if not quote_text:
             await ctx.send("❌ В этом сообщении нет текста для цитаты.", delete_after=10)
+            logger.warning(f"Попытка добавить цитату из пустого сообщения от {ctx.author}")
             return
         author_id = replied_msg.author.id
         author_name = replied_msg.author.display_name
 
         quote_id = await quotes_manager.add_quote(author_id, author_name, quote_text)
         await ctx.send(f"✅ Цитата добавлена (ID: {quote_id})")
+        logger.info(f"Цитата добавлена пользователем {ctx.author} (автор {author_name}, ID {quote_id})")
         return
 
     if text:
         if len(text) > 500:
             await ctx.send("❌ Слишком длинная цитата (максимум 500 символов).", delete_after=10)
+            logger.warning(f"Попытка добавить слишком длинную цитату от {ctx.author}")
             return
         quote_id = await quotes_manager.add_quote(ctx.author.id, ctx.author.display_name, text)
         await ctx.send(f"✅ Цитата добавлена (ID: {quote_id})")
+        logger.info(f"Цитата добавлена пользователем {ctx.author} (ID {quote_id})")
         return
 
     await ctx.send(
         "❌ Чтобы добавить цитату, либо ответьте на сообщение и напишите `/добавить`, либо укажите текст: `/добавить <текст>`.",
         delete_after=15
     )
+    logger.info(f"Неверное использование команды /добавить пользователем {ctx.author}")
 
 @bot.command(name='удалить_цитату')
 async def remove_quote_cmd(ctx, quote_id: int):
@@ -150,25 +171,28 @@ async def remove_quote_cmd(ctx, quote_id: int):
         pass
     if not ctx.author.guild_permissions.manage_messages:
         await ctx.send("❌ У вас недостаточно прав для удаления цитаты.", delete_after=10)
+        logger.warning(f"Пользователь {ctx.author} пытался удалить цитату без прав")
         return
 
     success = await quotes_manager.remove_quote(quote_id)
     if success:
         await ctx.send(f"✅ Цитата с ID {quote_id} удалена.")
+        logger.info(f"Цитата ID {quote_id} удалена пользователем {ctx.author}")
     else:
         await ctx.send(f"❌ Цитата с ID {quote_id} не найдена.")
+        logger.warning(f"Попытка удалить несуществующую цитату ID {quote_id} пользователем {ctx.author}")
 
 # ==================== СОБЫТИЯ И ЗАДАЧИ ====================
 @bot.event
 async def on_ready():
     global monitor_message
-    print(f'🛡️ Бот {bot.user.name} успешно запущен и готов к работе!')
+    logger.info(f'Бот {bot.user.name} успешно запущен и готов к работе!')
     # Синхронизация слеш-команд
     try:
         await bot.tree.sync()
-        print("✅ Слеш-команды синхронизированы")
+        logger.info("Слеш-команды синхронизированы")
     except Exception as e:
-        print(f"❌ Ошибка синхронизации слеш-команд: {e}")
+        logger.error(f"Ошибка синхронизации слеш-команд: {e}")
 
     bot.add_listener(event_manager.on_reaction_add, 'on_reaction_add')
     bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
