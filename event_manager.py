@@ -7,6 +7,7 @@ import os
 import asyncio
 import logging
 from config import EVENT_CHANNEL_ID, ANNOUNCE_CHANNEL_ID, PING_EVERYONE
+from toggle_manager import get_status, set_status
 
 logger = logging.getLogger(__name__)
 
@@ -314,3 +315,80 @@ async def sync_events(bot):
             logger.debug(f"Синхронизировано событие {eid}")
         except Exception as e:
             logger.warning(f"Не удалось синхронизировать событие {eid}: {e}")
+
+# ==================== ПАНЕЛЬ УПРАВЛЕНИЯ ====================
+class DashboardView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.clear_items()
+        features = {
+            "ai_enabled": ("🤖 AI-чат", discord.ButtonStyle.green, discord.ButtonStyle.red),
+            "monitor_enabled": ("🛡️ Мониторинг", discord.ButtonStyle.green, discord.ButtonStyle.red),
+            "quotes_enabled": ("📝 Цитатник", discord.ButtonStyle.green, discord.ButtonStyle.red)
+        }
+        for feature, (label, on_style, off_style) in features.items():
+            status = get_status(feature, True)
+            style = on_style if status else off_style
+            button_label = f"{label}: {'ВКЛ' if status else 'ВЫКЛ'}"
+            button = ui.Button(label=button_label, style=style, custom_id=f"toggle_{feature}")
+            button.callback = self.make_callback(feature)
+            self.add_item(button)
+
+    def make_callback(self, feature):
+        async def callback(interaction: discord.Interaction):
+            current = get_status(feature, True)
+            new_status = not current
+            set_status(feature, new_status)
+            self.update_buttons()
+            embed = discord.Embed(
+                title="📋 Панель управления ботом",
+                description="Управляйте функциями бота через кнопки ниже. Статус каждой функции отображается на кнопке.",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
+            await interaction.response.edit_message(embed=embed, view=self)
+            logger.info(f"Пользователь {interaction.user} переключил {feature} в {'ВКЛ' if new_status else 'ВЫКЛ'}")
+        return callback
+
+async def setup_dashboard(bot):
+    if not EVENT_CHANNEL_ID:
+        logger.warning("EVENT_CHANNEL_ID не задан, панель управления не создана.")
+        return
+    channel = bot.get_channel(EVENT_CHANNEL_ID)
+    if not channel:
+        try:
+            channel = await bot.fetch_channel(EVENT_CHANNEL_ID)
+        except Exception as e:
+            logger.error(f"Не удалось найти канал {EVENT_CHANNEL_ID}: {e}")
+            return
+
+    # Ищем существующее сообщение с панелью
+    async for msg in channel.history(limit=50):
+        if msg.author == bot.user and msg.embeds:
+            for row in msg.components:
+                for comp in row.children:
+                    if hasattr(comp, 'custom_id') and comp.custom_id.startswith('toggle_'):
+                        # Обновляем существующее сообщение
+                        view = DashboardView()
+                        embed = discord.Embed(
+                            title="📋 Панель управления ботом",
+                            description="Управляйте функциями бота через кнопки ниже. Статус каждой функции отображается на кнопке.",
+                            color=discord.Color.blue()
+                        )
+                        embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
+                        await msg.edit(embed=embed, view=view)
+                        logger.info("Обновлено существующее сообщение панели управления")
+                        return
+    # Если не нашли – создаём новое
+    view = DashboardView()
+    embed = discord.Embed(
+        title="📋 Панель управления ботом",
+        description="Управляйте функциями бота через кнопки ниже. Статус каждой функции отображается на кнопке.",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
+    await channel.send(embed=embed, view=view)
+    logger.info("Создано новое сообщение панели управления")
