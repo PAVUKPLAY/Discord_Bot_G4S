@@ -137,3 +137,12 @@ async def on_ai_message(message, bot):
                     history = history[- (MAX_HISTORY_LENGTH * 2):]
                 contexts[user_id] = history
                 await send_long_answer(message, answer)
+
+# Новая функция для очистки истории пользователя
+async def clear_history(user_id):
+    if user_id in contexts:
+        del contexts[user_id]
+        logger.info(f"Очищена история для пользователя {user_id}")
+        return True
+    logger.info(f"Попытка очистить историю для пользователя {user_id}, но история отсутствовала")
+    return False
