@@ -2,6 +2,9 @@ import json
 import os
 import random
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 QUOTES_FILE = "quotes.json"
 
@@ -9,8 +12,11 @@ def load_quotes():
     if os.path.exists(QUOTES_FILE):
         with open(QUOTES_FILE, "r", encoding="utf-8") as f:
             try:
-                return json.load(f)
-            except:
+                data = json.load(f)
+                logger.info(f"Загружено {len(data)} цитат")
+                return data
+            except Exception as e:
+                logger.error(f"Ошибка загрузки цитат: {e}")
                 return []
     return []
 
@@ -30,6 +36,7 @@ async def add_quote(author_id, author_name, text):
         "timestamp": datetime.now().isoformat()
     })
     save_quotes(quotes)
+    logger.info(f"Добавлена цитата ID {quote_id} от {author_name}")
     return quote_id
 
 async def remove_quote(quote_id):
@@ -38,7 +45,9 @@ async def remove_quote(quote_id):
         if q["id"] == quote_id:
             del quotes[i]
             save_quotes(quotes)
+            logger.info(f"Удалена цитата ID {quote_id}")
             return True
+    logger.warning(f"Попытка удалить несуществующую цитату ID {quote_id}")
     return False
 
 async def get_random_quote():
