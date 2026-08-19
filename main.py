@@ -188,7 +188,6 @@ async def remove_quote_cmd(ctx, quote_id: int):
         await ctx.message.delete()
     except:
         pass
-    # Проверка прав через роли
     if not has_moderator_role(ctx.author):
         await ctx.send("❌ У вас недостаточно прав для удаления цитаты.", delete_after=10)
         logger.warning(f"Пользователь {ctx.author} пытался удалить цитату без прав")
