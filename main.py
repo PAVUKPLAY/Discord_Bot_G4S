@@ -7,6 +7,7 @@ from arma_monitor import update_status, cleanup_monitor
 from ai_chat import on_ai_message, clear_history
 import event_manager
 import quotes_manager
+from toggle_manager import get_status
 
 # Настройка логирования
 logging.basicConfig(
@@ -38,13 +39,14 @@ async def slash_help(interaction: discord.Interaction):
         name="🤖 AI-чат",
         value=(
             "Напишите **`Ученый <вопрос>`** или **`Учёный <вопрос>`**, или просто упомяните меня, чтобы задать вопрос.\n"
-            "Для очистки истории диалога используйте **`/очистить`** (или `/clear`)."
+            "Для очистки истории диалога используйте **`/очистить`** (или `/clear`).\n"
+            "Управление включением/выключением AI – через панель управления в канале событий."
         ),
         inline=False
     )
     embed.add_field(
         name="🛡️ Мониторинг сервера Arma 3",
-        value="Каждую минуту я обновляю информацию о сервере в специальном канале.",
+        value="Каждую минуту я обновляю информацию о сервере в специальном канале.\nУправление через панель управления.",
         inline=False
     )
     embed.add_field(
@@ -55,7 +57,8 @@ async def slash_help(interaction: discord.Interaction):
             "`/цитаты [ник]` – цитаты пользователя\n"
             "`/добавить` – в ответ на сообщение, чтобы добавить его как цитату\n"
             "`/добавить <текст>` – добавить цитату вручную (автор – вы)\n"
-            "`/удалить_цитату <id>` – удалить цитату (только для модераторов)"
+            "`/удалить_цитату <id>` – удалить цитату (только для модераторов)\n"
+            "Управление включением/выключением цитатника – через панель управления."
         ),
         inline=False
     )
@@ -72,6 +75,10 @@ async def slash_help(interaction: discord.Interaction):
 # ==================== ПРЕФИКСНЫЕ КОМАНДЫ ====================
 @bot.command(name='цитата')
 async def random_quote(ctx):
+    # Проверяем, включён ли цитатник
+    if not get_status("quotes_enabled", True):
+        await ctx.send("📝 Цитатник в данный момент **выключен**. Включите его через панель управления.", delete_after=10)
+        return
     try:
         await ctx.message.delete()
     except:
@@ -92,6 +99,9 @@ async def random_quote(ctx):
 
 @bot.command(name='цитаты')
 async def user_quotes(ctx, *, user: discord.User = None):
+    if not get_status("quotes_enabled", True):
+        await ctx.send("📝 Цитатник в данный момент **выключен**. Включите его через панель управления.", delete_after=10)
+        return
     try:
         await ctx.message.delete()
     except:
@@ -120,6 +130,9 @@ async def user_quotes(ctx, *, user: discord.User = None):
 
 @bot.command(name='добавить', aliases=['добавить_цитату'])
 async def add_quote_cmd(ctx, *, text: str = None):
+    if not get_status("quotes_enabled", True):
+        await ctx.send("📝 Цитатник в данный момент **выключен**. Включите его через панель управления.", delete_after=10)
+        return
     try:
         await ctx.message.delete()
     except:
@@ -168,6 +181,9 @@ async def add_quote_cmd(ctx, *, text: str = None):
 
 @bot.command(name='удалить_цитату')
 async def remove_quote_cmd(ctx, quote_id: int):
+    if not get_status("quotes_enabled", True):
+        await ctx.send("📝 Цитатник в данный момент **выключен**. Включите его через панель управления.", delete_after=10)
+        return
     try:
         await ctx.message.delete()
     except:
@@ -185,7 +201,6 @@ async def remove_quote_cmd(ctx, quote_id: int):
         await ctx.send(f"❌ Цитата с ID {quote_id} не найдена.")
         logger.warning(f"Попытка удалить несуществующую цитату ID {quote_id} пользователем {ctx.author}")
 
-# ==================== НОВАЯ КОМАНДА ДЛЯ ОЧИСТКИ ИСТОРИИ AI ====================
 @bot.command(name='очистить', aliases=['clear'])
 async def clear_history_cmd(ctx):
     try:
@@ -222,6 +237,8 @@ async def on_ready():
     monitor_message = await update_status(bot, None)
 
     await event_manager.cleanup_event_button(bot)
+    # Создаём панель управления (вместо отдельной кнопки AI)
+    await event_manager.setup_dashboard(bot)
 
     if not update_status_task.is_running():
         update_status_task.start()
