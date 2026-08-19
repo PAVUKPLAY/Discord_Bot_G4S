@@ -8,6 +8,7 @@ import asyncio
 import logging
 from config import EVENT_CHANNEL_ID, ANNOUNCE_CHANNEL_ID, PING_EVERYONE
 from toggle_manager import get_status, set_status
+from utils import has_moderator_role
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,11 @@ class CreateEventButton(ui.View):
 
     @ui.button(label='➕ Создать смежку', style=discord.ButtonStyle.primary, custom_id='create_event_button')
     async def create_button(self, interaction: discord.Interaction, button: ui.Button):
+        # Проверка прав
+        if not has_moderator_role(interaction.user):
+            await interaction.response.send_message("❌ У вас недостаточно прав для создания смежки.", ephemeral=True)
+            logger.warning(f"Пользователь {interaction.user} пытался создать смежку без прав")
+            return
         try:
             logger.info(f"Нажата кнопка создания смежки от {interaction.user.display_name}")
             modal = CreateEventModal()
@@ -339,6 +345,11 @@ class DashboardView(ui.View):
 
     def make_callback(self, feature):
         async def callback(interaction: discord.Interaction):
+            # Проверка прав
+            if not has_moderator_role(interaction.user):
+                await interaction.response.send_message("❌ У вас недостаточно прав для управления панелью.", ephemeral=True)
+                logger.warning(f"Пользователь {interaction.user} пытался управлять панелью без прав")
+                return
             current = get_status(feature, True)
             new_status = not current
             set_status(feature, new_status)
