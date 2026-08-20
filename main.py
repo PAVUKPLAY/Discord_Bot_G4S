@@ -11,7 +11,6 @@ from toggle_manager import get_status
 from utils import has_moderator_role
 import welcome_manager
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -78,7 +77,7 @@ async def slash_help(interaction: discord.Interaction):
         value="Используйте **`/help`** в любом канале.",
         inline=False
     )
-    embed.set_footer(text="G4S Сподручный • v1.0")
+    embed.set_footer(text="G4S Командование • v1.0")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
     logger.info(f"Пользователь {interaction.user} запросил справку")
@@ -103,7 +102,7 @@ async def random_quote(ctx):
         description=f"\"{quote['text']}\"",
         color=discord.Color.gold()
     )
-    embed.set_footer(text=f"Автор: {quote['author_name']} • ID: {quote['id']}")
+    embed.set_footer(text=f"Автор: {quote['author_name']} • ID: {quote['id']} • G4S Командование")
     await ctx.send(embed=embed)
     logger.info(f"Пользователь {ctx.author} получил случайную цитату ID {quote['id']}")
 
@@ -134,7 +133,9 @@ async def user_quotes(ctx, *, user: discord.User = None):
             inline=False
         )
     if len(quotes) > 10:
-        embed.set_footer(text=f"Показано 10 из {len(quotes)} цитат.")
+        embed.set_footer(text=f"Показано 10 из {len(quotes)} цитат. • G4S Командование")
+    else:
+        embed.set_footer(text="G4S Командование")
     await ctx.send(embed=embed)
     logger.info(f"Пользователь {ctx.author} запросил цитаты {user.display_name} (всего {len(quotes)})")
 
@@ -229,14 +230,12 @@ async def clear_history_cmd(ctx):
 # ==================== СОБЫТИЯ ====================
 @bot.event
 async def on_member_join(member):
-    """Обработчик нового участника."""
     await welcome_manager.send_welcome_message(member)
 
 @bot.event
 async def on_ready():
     global monitor_message
     logger.info(f'Бот {bot.user.name} успешно запущен и готов к работе!')
-    # Синхронизация слеш-команд
     try:
         await bot.tree.sync()
         logger.info("Слеш-команды синхронизированы")
