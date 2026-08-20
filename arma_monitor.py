@@ -141,7 +141,7 @@ async def update_status(bot, monitor_message):
         )
 
         embed = discord.Embed(
-            title="🛡️ «Спектр Войны» • Мониторинг G4S",
+            title="🛡️ Group 4 Securicor • Мониторинг G4S",
             color=discord.Color.dark_theme() if "НЕДОСТУПЕН" not in status_text else discord.Color.red()
         )
         embed.description = content_block
@@ -211,7 +211,7 @@ async def cleanup_monitor(bot):
     async for msg in channel.history(limit=100):
         if msg.author == bot.user and msg.embeds:
             for embed in msg.embeds:
-                if embed.title and "Мониторинг G4S" in embed.title:
+                if embed.title and "Group 4 Securicor" in embed.title:
                     await msg.delete()
                     logger.info(f"Удалено старое сообщение мониторинга {msg.id}")
                     break
