@@ -75,8 +75,7 @@ async def update_event_embed(message, event_id):
         value="\n".join(non_participants) if non_participants else "Пока никого",
         inline=True
     )
-    embed.set_footer(text=f"ID события: {event_id}")
-
+    embed.set_footer(text=f"G4S Командование • ID: {event_id}")
     await message.edit(embed=embed)
     logger.debug(f"Обновлён embed события {event_id}")
 
@@ -125,7 +124,7 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             )
             embed.add_field(name="✅ Участники", value="Пока никого", inline=True)
             embed.add_field(name="❌ Не смогут", value="Пока никого", inline=True)
-            embed.set_footer(text=f"ID события: {event_id}")
+            embed.set_footer(text=f"G4S Командование • ID: {event_id}")
 
             channel = interaction.guild.get_channel(ANNOUNCE_CHANNEL_ID)
             if not channel:
@@ -335,9 +334,7 @@ class RestartConfirmModal(ui.Modal, title='Подтверждение перез
         if self.confirm.value.upper() == 'ДА':
             await interaction.response.send_message("🔄 Перезапуск бота...", ephemeral=True)
             logger.info(f"Бот перезапущен пользователем {interaction.user}")
-            # Сохраняем все данные перед выходом
             save_events(events)
-            # Немедленное завершение процесса без генерации исключения
             os._exit(0)
         else:
             await interaction.response.send_message("❌ Перезапуск отменён.", ephemeral=True)
@@ -363,7 +360,6 @@ class DashboardView(ui.View):
             button.callback = self.make_callback(feature)
             self.add_item(button)
 
-        # Кнопка перезапуска (всегда видна, но с проверкой прав внутри)
         restart_button = ui.Button(label="🔄 Перезапустить бота", style=discord.ButtonStyle.danger, custom_id="restart_bot")
         restart_button.callback = self.restart_callback
         self.add_item(restart_button)
@@ -384,6 +380,7 @@ class DashboardView(ui.View):
                 color=discord.Color.blue()
             )
             embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
+            embed.set_footer(text="G4S Командование")
             await interaction.response.edit_message(embed=embed, view=self)
             logger.info(f"Пользователь {interaction.user} переключил {feature} в {'ВКЛ' if new_status else 'ВЫКЛ'}")
         return callback
@@ -393,7 +390,6 @@ class DashboardView(ui.View):
             await interaction.response.send_message("❌ У вас недостаточно прав для перезапуска бота.", ephemeral=True)
             logger.warning(f"Пользователь {interaction.user} пытался перезапустить бота без прав")
             return
-        # Открываем модальное окно подтверждения
         await interaction.response.send_modal(RestartConfirmModal())
 
 async def setup_dashboard(bot):
@@ -408,13 +404,11 @@ async def setup_dashboard(bot):
             logger.error(f"Не удалось найти канал {EVENT_CHANNEL_ID}: {e}")
             return
 
-    # Ищем существующее сообщение с панелью
     async for msg in channel.history(limit=50):
         if msg.author == bot.user and msg.embeds:
             for row in msg.components:
                 for comp in row.children:
                     if hasattr(comp, 'custom_id') and comp.custom_id.startswith('toggle_'):
-                        # Обновляем существующее сообщение
                         view = DashboardView()
                         embed = discord.Embed(
                             title="📋 Панель управления ботом",
@@ -422,10 +416,10 @@ async def setup_dashboard(bot):
                             color=discord.Color.blue()
                         )
                         embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
+                        embed.set_footer(text="G4S Командование")
                         await msg.edit(embed=embed, view=view)
                         logger.info("Обновлено существующее сообщение панели управления")
                         return
-    # Если не нашли – создаём новое
     view = DashboardView()
     embed = discord.Embed(
         title="📋 Панель управления ботом",
@@ -433,5 +427,6 @@ async def setup_dashboard(bot):
         color=discord.Color.blue()
     )
     embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
+    embed.set_footer(text="G4S Командование")
     await channel.send(embed=embed, view=view)
     logger.info("Создано новое сообщение панели управления")
