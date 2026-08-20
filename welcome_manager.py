@@ -1,7 +1,8 @@
 import discord
 from discord import ui
 import logging
-from config import WELCOME_CHANNEL_ID, ORGANIZATION_CHANNEL_ID, GUEST_ROLE_ID, FIGHTER_ROLE_ID, STAFF_ROLE_IDS
+from datetime import datetime
+from config import WELCOME_CHANNEL_ID, ORGANIZATION_CHANNEL_ID, GUEST_ROLE_ID, FIGHTER_ROLE_ID
 from utils import has_moderator_role
 
 logger = logging.getLogger(__name__)
