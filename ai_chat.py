@@ -113,7 +113,7 @@ async def on_ai_message(message, bot):
         return
 
     if not get_status("ai_enabled", True):
-        return  # просто игнорируем, чтобы не спамить
+        return
 
     content = message.content
     is_mentioned = bot.user.mentioned_in(message)
