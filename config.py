@@ -11,7 +11,7 @@ EVENT_CHANNEL_ID = os.getenv('EVENT_CHANNEL_ID')
 ANNOUNCE_CHANNEL_ID = os.getenv('ANNOUNCE_CHANNEL_ID')
 PING_EVERYONE = os.getenv('PING_EVERYONE', 'True') == 'True'
 
-# Новые переменные для приветствия и заявок
+# Переменные для приветствия и заявок
 WELCOME_CHANNEL_ID = os.getenv('WELCOME_CHANNEL_ID')
 ORGANIZATION_CHANNEL_ID = os.getenv('ORGANIZATION_CHANNEL_ID')
 GUEST_ROLE_ID = os.getenv('GUEST_ROLE_ID')
