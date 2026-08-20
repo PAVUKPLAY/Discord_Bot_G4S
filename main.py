@@ -9,6 +9,7 @@ import event_manager
 import quotes_manager
 from toggle_manager import get_status
 from utils import has_moderator_role
+import welcome_manager
 
 # Настройка логирования
 logging.basicConfig(
@@ -60,6 +61,15 @@ async def slash_help(interaction: discord.Interaction):
             "`/добавить <текст>` – добавить цитату вручную (автор – вы)\n"
             "`/удалить_цитату <id>` – удалить цитату (только для модераторов)\n"
             "Управление включением/выключением цитатника – через панель управления."
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="📋 Заявки в отряд",
+        value=(
+            "При вступлении на сервер ты получишь роль **Гость** и приветственное сообщение.\n"
+            "Нажми **«Подать заявку»**, заполни форму – модерация рассмотрит её.\n"
+            "После принятия ты получишь роль **Боец**!"
         ),
         inline=False
     )
@@ -216,7 +226,12 @@ async def clear_history_cmd(ctx):
         await ctx.send("📭 У вас не было сохранённой истории диалога.", delete_after=10)
         logger.info(f"Пользователь {ctx.author} попытался очистить историю, но её не было")
 
-# ==================== СОБЫТИЯ И ЗАДАЧИ ====================
+# ==================== СОБЫТИЯ ====================
+@bot.event
+async def on_member_join(member):
+    """Обработчик нового участника."""
+    await welcome_manager.send_welcome_message(member)
+
 @bot.event
 async def on_ready():
     global monitor_message
