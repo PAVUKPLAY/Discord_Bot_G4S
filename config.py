@@ -11,14 +11,16 @@ EVENT_CHANNEL_ID = os.getenv('EVENT_CHANNEL_ID')
 ANNOUNCE_CHANNEL_ID = os.getenv('ANNOUNCE_CHANNEL_ID')
 PING_EVERYONE = os.getenv('PING_EVERYONE', 'True') == 'True'
 
-# Переменные для приветствия и заявок
 WELCOME_CHANNEL_ID = os.getenv('WELCOME_CHANNEL_ID')
 ORGANIZATION_CHANNEL_ID = os.getenv('ORGANIZATION_CHANNEL_ID')
 GUEST_ROLE_ID = os.getenv('GUEST_ROLE_ID')
 FIGHTER_ROLE_ID = os.getenv('FIGHTER_ROLE_ID')
 
-# Роли модераторов (через запятую)
 MODERATOR_ROLE_IDS = [int(x) for x in os.getenv('MODERATOR_ROLE_IDS', '').split(',') if x.strip().isdigit()]
+
+BUNKER_CATEGORY_ID = os.getenv('BUNKER_CATEGORY_ID')
+if BUNKER_CATEGORY_ID:
+    BUNKER_CATEGORY_ID = int(BUNKER_CATEGORY_ID)
 
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN не задан!")
