@@ -10,7 +10,7 @@ import quotes_manager
 from toggle_manager import get_status
 from utils import has_moderator_role
 import welcome_manager
-import bunker_advanced as ba
+import bunker_new  # <-- добавлен импорт
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,7 +28,7 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 bot.remove_command('help')
 
 monitor_message = None
-active_games = {}  # channel_id -> ba.AdvancedGame
+active_games = {}  # для бункерной игры (если нужно)
 
 # ==================== СЛЕШ-КОМАНДЫ ====================
 
@@ -77,9 +77,9 @@ async def slash_help(interaction: discord.Interaction):
     embed.add_field(
         name="🎲 Игра Бункер",
         value=(
-            "Создайте игру с помощью `/bunker_create`.\n"
-            "Присоединяйтесь к голосовому каналу и нажмите кнопку «Присоединиться».\n"
-            "Когда все готовы, нажмите «Начать игру» – начнётся пошаговый процесс с открытием карт и голосованием."
+            "Создайте игру через кнопку в специальном канале.\n"
+            "Присоединяйтесь к голосовому каналу, нажимайте кнопки.\n"
+            "Подробности – в процессе игры."
         ),
         inline=False
     )
@@ -175,41 +175,12 @@ async def slash_clear_history(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("📭 У вас не было сохранённой истории диалога.", ephemeral=True)
 
-# ==================== КОМАНДЫ БУНКЕРА ====================
-
-@bot.tree.command(name="bunker_create", description="Создать новую игру Бункер в этом канале")
-@app_commands.describe(max_players="Максимальное количество игроков (по умолчанию 6)")
-async def bunker_create(interaction: discord.Interaction, max_players: int = 6):
-    if not interaction.user.guild_permissions.manage_channels:
-        await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
-        return
-    if interaction.channel_id in active_games:
-        await interaction.response.send_message("❌ В этом канале уже есть игра.", ephemeral=True)
-        return
-    game = ba.AdvancedGame(interaction.guild, interaction.channel, max_players)
-    await game.create_channels()
-    active_games[interaction.channel_id] = game
-    embed = discord.Embed(
-        title="🎮 Игра Бункер создана!",
-        description=f"Максимум игроков: {max_players}\nПрисоединяйтесь к голосовому каналу `{game.voice_channel.name}` и нажмите кнопку ниже.",
-        color=discord.Color.green()
-    )
-    view = ba.LobbyView(game)
-    await interaction.response.send_message(embed=embed, view=view)
-    logger.info(f"Игра Бункер создана в канале {interaction.channel_id} пользователем {interaction.user}")
-
-@bot.tree.command(name="bunker_end_advanced", description="Принудительно завершить игру в этом канале")
-async def bunker_end_advanced(interaction: discord.Interaction):
-    game = active_games.get(interaction.channel_id)
-    if not game:
-        await interaction.response.send_message("❌ Нет активной игры.", ephemeral=True)
-        return
-    if not interaction.user.guild_permissions.manage_channels:
-        await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
-        return
-    await game.finish_game()
-    del active_games[interaction.channel_id]
-    await interaction.response.send_message("✅ Игра завершена.", ephemeral=True)
+# ==================== КОМАНДА ДЛЯ БУНКЕРА (опционально) ====================
+@bot.tree.command(name="использовать_условие", description="Использовать ваше особое условие")
+@app_commands.describe(target="Игрок, на которого направлено условие (если требуется)")
+async def use_special_condition(interaction: discord.Interaction, target: discord.Member = None):
+    # Заглушка – требует доработки
+    await interaction.response.send_message("Команда в разработке.", ephemeral=True)
 
 # ==================== СОБЫТИЯ И ЗАДАЧИ ====================
 
@@ -237,6 +208,9 @@ async def on_ready():
 
     await event_manager.cleanup_event_button(bot)
     await event_manager.setup_dashboard(bot)
+
+    # === Инициализация сообщения для лобби Бункера ===
+    await bunker_new.ensure_lobby_message(bot)
 
     if not update_status_task.is_running():
         update_status_task.start()
