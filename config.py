@@ -18,9 +18,14 @@ FIGHTER_ROLE_ID = os.getenv('FIGHTER_ROLE_ID')
 
 MODERATOR_ROLE_IDS = [int(x) for x in os.getenv('MODERATOR_ROLE_IDS', '').split(',') if x.strip().isdigit()]
 
+# === Игра Бункер ===
 BUNKER_CATEGORY_ID = os.getenv('BUNKER_CATEGORY_ID')
 if BUNKER_CATEGORY_ID:
     BUNKER_CATEGORY_ID = int(BUNKER_CATEGORY_ID)
+
+BUNKER_LOBBY_CHANNEL_ID = os.getenv('BUNKER_LOBBY_CHANNEL_ID')
+if BUNKER_LOBBY_CHANNEL_ID:
+    BUNKER_LOBBY_CHANNEL_ID = int(BUNKER_LOBBY_CHANNEL_ID)
 
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN не задан!")
