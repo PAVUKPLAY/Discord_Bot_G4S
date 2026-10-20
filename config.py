@@ -18,6 +18,18 @@ FIGHTER_ROLE_ID = os.getenv('FIGHTER_ROLE_ID')
 
 MODERATOR_ROLE_IDS = [int(x) for x in os.getenv('MODERATOR_ROLE_IDS', '').split(',') if x.strip().isdigit()]
 
+# === Радио ===
+RADIO_VOICE_CHANNEL_ID = os.getenv('RADIO_VOICE_CHANNEL_ID')
+if RADIO_VOICE_CHANNEL_ID:
+    RADIO_VOICE_CHANNEL_ID = int(RADIO_VOICE_CHANNEL_ID)
+
+RADIO_TEXT_CHANNEL_ID = os.getenv('RADIO_TEXT_CHANNEL_ID')
+if RADIO_TEXT_CHANNEL_ID:
+    RADIO_TEXT_CHANNEL_ID = int(RADIO_TEXT_CHANNEL_ID)
+
+RADIO_DEFAULT_STATION = os.getenv('RADIO_DEFAULT_STATION', 'Radio Record')
+
+# === Проверки обязательных переменных ===
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN не задан!")
 if not TARGET_CHANNEL_ID:
