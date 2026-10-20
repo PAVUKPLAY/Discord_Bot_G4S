@@ -12,7 +12,8 @@ from utils import has_moderator_role
 
 logger = logging.getLogger(__name__)
 
-DATA_FILE = "events_data.json"
+DATA_FILE = os.getenv("EVENTS_FILE", "events_data.json")
+DATA_FILE = os.path.abspath(DATA_FILE)
 
 def load_events():
     if os.path.exists(DATA_FILE):
@@ -37,6 +38,8 @@ def save_events(events):
         data[eid]['non_participants'] = list(ev['non_participants'])
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
 
 events = load_events()
 
@@ -276,7 +279,7 @@ async def on_reaction_add(reaction, user):
         if user.id in event['non_participants']:
             event['non_participants'].remove(user.id)
         event['participants'].add(user.id)
-    else:  # ❌
+    else:
         if user.id in event['participants']:
             event['participants'].remove(user.id)
         event['non_participants'].add(user.id)
@@ -335,7 +338,10 @@ class RestartConfirmModal(ui.Modal, title='Подтверждение перез
             await interaction.response.send_message("🔄 Перезапуск бота...", ephemeral=True)
             logger.info(f"Бот перезапущен пользователем {interaction.user}")
             save_events(events)
-            os._exit(0)
+            import sys
+            bot = interaction.client
+            await bot.close()
+            sys.exit(0)
         else:
             await interaction.response.send_message("❌ Перезапуск отменён.", ephemeral=True)
 
