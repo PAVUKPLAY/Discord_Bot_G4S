@@ -5,7 +5,6 @@ from config import DISCORD_TOKEN
 from arma_monitor import update_status, cleanup_monitor
 from ai_chat import on_ai_message, clear_history
 import event_manager
-import quotes_manager
 from toggle_manager import get_status
 from utils import has_moderator_role
 import welcome_manager
@@ -51,18 +50,6 @@ async def slash_help(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
-        name="📝 Цитатник",
-        value=(
-            "Доступные команды:\n"
-            "`/цитата` – случайная цитата\n"
-            "`/цитаты [ник]` – цитаты пользователя\n"
-            "`/добавить <текст>` – добавить цитату (автор – вы)\n"
-            "`/удалить_цитату <id>` – удалить цитату (только для модераторов)\n"
-            "Управление включением/выключением цитатника – через панель управления."
-        ),
-        inline=False
-    )
-    embed.add_field(
         name="📋 Заявки в отряд",
         value=(
             "При вступлении на сервер ты получишь роль **Гость** и приветственное сообщение.\n"
@@ -79,79 +66,6 @@ async def slash_help(interaction: discord.Interaction):
     embed.set_footer(text="G4S Командование • v1.0")
     await interaction.response.send_message(embed=embed, ephemeral=True)
     logger.info(f"Пользователь {interaction.user} запросил справку")
-
-@bot.tree.command(name="цитата", description="Показать случайную цитату")
-async def slash_random_quote(interaction: discord.Interaction):
-    if not get_status("quotes_enabled", True):
-        await interaction.response.send_message("📝 Цитатник в данный момент **выключен**. Включите его через панель управления.", ephemeral=True)
-        return
-    quote = await quotes_manager.get_random_quote()
-    if not quote:
-        await interaction.response.send_message("📭 Цитат пока нет. Добавьте первую с помощью `/добавить`.", ephemeral=True)
-        return
-    embed = discord.Embed(
-        title="📜 Случайная цитата",
-        description=f"\"{quote['text']}\"",
-        color=discord.Color.gold()
-    )
-    embed.set_footer(text=f"Автор: {quote['author_name']} • ID: {quote['id']} • G4S Командование")
-    await interaction.response.send_message(embed=embed)
-    logger.info(f"Пользователь {interaction.user} получил случайную цитату ID {quote['id']}")
-
-@bot.tree.command(name="цитаты", description="Показать цитаты пользователя")
-async def slash_user_quotes(interaction: discord.Interaction, user: discord.User = None):
-    if not get_status("quotes_enabled", True):
-        await interaction.response.send_message("📝 Цитатник в данный момент **выключен**. Включите его через панель управления.", ephemeral=True)
-        return
-    if user is None:
-        user = interaction.user
-    quotes = await quotes_manager.get_user_quotes(user.id)
-    if not quotes:
-        await interaction.response.send_message(f"📭 У пользователя {user.display_name} нет цитат.", ephemeral=True)
-        return
-    embed = discord.Embed(
-        title=f"📜 Цитаты {user.display_name}",
-        color=discord.Color.blue()
-    )
-    for q in quotes[:10]:
-        embed.add_field(
-            name=f"ID {q['id']}",
-            value=f"\"{q['text']}\"",
-            inline=False
-        )
-    if len(quotes) > 10:
-        embed.set_footer(text=f"Показано 10 из {len(quotes)} цитат. • G4S Командование")
-    else:
-        embed.set_footer(text="G4S Командование")
-    await interaction.response.send_message(embed=embed)
-    logger.info(f"Пользователь {interaction.user} запросил цитаты {user.display_name} (всего {len(quotes)})")
-
-@bot.tree.command(name="добавить", description="Добавить новую цитату (автор – вы)")
-async def slash_add_quote(interaction: discord.Interaction, text: str):
-    if not get_status("quotes_enabled", True):
-        await interaction.response.send_message("📝 Цитатник в данный момент **выключен**. Включите его через панель управления.", ephemeral=True)
-        return
-    if len(text) > 500:
-        await interaction.response.send_message("❌ Слишком длинная цитата (максимум 500 символов).", ephemeral=True)
-        return
-    quote_id = await quotes_manager.add_quote(interaction.user.id, interaction.user.display_name, text)
-    await interaction.response.send_message(f"✅ Цитата добавлена (ID: {quote_id})", ephemeral=True)
-    logger.info(f"Цитата добавлена пользователем {interaction.user} (ID {quote_id})")
-
-@bot.tree.command(name="удалить_цитату", description="Удалить цитату по ID (только для модераторов)")
-async def slash_remove_quote(interaction: discord.Interaction, quote_id: int):
-    if not get_status("quotes_enabled", True):
-        await interaction.response.send_message("📝 Цитатник в данный момент **выключен**. Включите его через панель управления.", ephemeral=True)
-        return
-    if not has_moderator_role(interaction.user):
-        await interaction.response.send_message("❌ У вас недостаточно прав для удаления цитаты.", ephemeral=True)
-        return
-    success = await quotes_manager.remove_quote(quote_id)
-    if success:
-        await interaction.response.send_message(f"✅ Цитата с ID {quote_id} удалена.", ephemeral=True)
-        logger.info(f"Цитата ID {quote_id} удалена пользователем {interaction.user}")
-    else:
-        await interaction.response.send_message(f"❌ Цитата с ID {quote_id} не найдена.", ephemeral=True)
 
 @bot.tree.command(name="очистить", description="Очистить вашу историю диалога с AI")
 async def slash_clear_history(interaction: discord.Interaction):
