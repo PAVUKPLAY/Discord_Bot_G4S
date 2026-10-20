@@ -30,11 +30,3 @@ def set_status(feature: str, value: bool):
     settings[feature] = value
     save_settings(settings)
     logger.info(f"Функция {feature} {'включена' if value else 'выключена'}")
-
-# === Новые функции для хранения ID сообщения лобби ===
-def get_lobby_message_id() -> Optional[int]:
-    return settings.get("lobby_message_id")
-
-def set_lobby_message_id(msg_id: int):
-    settings["lobby_message_id"] = msg_id
-    save_settings(settings)
