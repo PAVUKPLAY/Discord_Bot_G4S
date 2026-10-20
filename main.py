@@ -8,6 +8,7 @@ import event_manager
 from toggle_manager import get_status
 from utils import has_moderator_role
 import welcome_manager
+from radio_manager import RadioManager, RadioControlView
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,11 +21,13 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
 intents.members = True
+intents.voice_states = True
 
 bot = commands.Bot(command_prefix='/', intents=intents)
 bot.remove_command('help')
 
 monitor_message = None
+radio_manager = RadioManager()
 
 # ==================== СЛЕШ-КОМАНДЫ ====================
 
@@ -50,6 +53,12 @@ async def slash_help(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
+        name="📻 Радио",
+        value="Бот автоматически заходит в голосовой канал и играет станцию по умолчанию.\n"
+              "В текстовом канале есть панель с кнопками «Сменить станцию», «Пауза/Играть», «Остановить».",
+        inline=False
+    )
+    embed.add_field(
         name="📋 Заявки в отряд",
         value=(
             "При вступлении на сервер ты получишь роль **Гость** и приветственное сообщение.\n"
@@ -61,11 +70,6 @@ async def slash_help(interaction: discord.Interaction):
     embed.add_field(
         name="📅 События (смежки)",
         value="Модераторы могут создавать смежки через кнопку в канале событий. Участники подтверждают участие реакциями ✅ / ❌.",
-        inline=False
-    )
-    embed.add_field(
-        name="❓ Эта справка",
-        value="Используйте **`/help`** в любом канале.",
         inline=False
     )
     embed.set_footer(text="G4S Командование • v1.0")
@@ -108,6 +112,10 @@ async def on_ready():
 
     await event_manager.cleanup_event_button(bot)
     await event_manager.setup_dashboard(bot)
+
+    # === Радио ===
+    bot.add_view(RadioControlView(radio_manager))
+    bot.loop.create_task(radio_manager.auto_start(bot))
 
     if not update_status_task.is_running():
         update_status_task.start()
