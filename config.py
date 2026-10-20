@@ -29,6 +29,8 @@ if RADIO_TEXT_CHANNEL_ID:
 
 RADIO_DEFAULT_STATION = os.getenv('RADIO_DEFAULT_STATION', 'Radio Record')
 
+RADIO_DEFAULT_VOLUME = float(os.getenv('RADIO_DEFAULT_VOLUME', '0.5'))  # 0.0–2.0, где 1.0 = 100%
+
 # === Проверки обязательных переменных ===
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN не задан!")
