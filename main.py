@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
 import logging
 from config import DISCORD_TOKEN
 from arma_monitor import update_status, cleanup_monitor
@@ -10,7 +9,6 @@ import quotes_manager
 from toggle_manager import get_status
 from utils import has_moderator_role
 import welcome_manager
-import bunker_new  # <-- добавлен импорт
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,7 +26,6 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 bot.remove_command('help')
 
 monitor_message = None
-active_games = {}  # для бункерной игры (если нужно)
 
 # ==================== СЛЕШ-КОМАНДЫ ====================
 
@@ -71,15 +68,6 @@ async def slash_help(interaction: discord.Interaction):
             "При вступлении на сервер ты получишь роль **Гость** и приветственное сообщение.\n"
             "Нажми **«Подать заявку»**, заполни форму – модерация рассмотрит её.\n"
             "После принятия ты получишь роль **Боец**!"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="🎲 Игра Бункер",
-        value=(
-            "Создайте игру через кнопку в специальном канале.\n"
-            "Присоединяйтесь к голосовому каналу, нажимайте кнопки.\n"
-            "Подробности – в процессе игры."
         ),
         inline=False
     )
@@ -175,13 +163,6 @@ async def slash_clear_history(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("📭 У вас не было сохранённой истории диалога.", ephemeral=True)
 
-# ==================== КОМАНДА ДЛЯ БУНКЕРА (опционально) ====================
-@bot.tree.command(name="использовать_условие", description="Использовать ваше особое условие")
-@app_commands.describe(target="Игрок, на которого направлено условие (если требуется)")
-async def use_special_condition(interaction: discord.Interaction, target: discord.Member = None):
-    # Заглушка – требует доработки
-    await interaction.response.send_message("Команда в разработке.", ephemeral=True)
-
 # ==================== СОБЫТИЯ И ЗАДАЧИ ====================
 
 @bot.event
@@ -208,9 +189,6 @@ async def on_ready():
 
     await event_manager.cleanup_event_button(bot)
     await event_manager.setup_dashboard(bot)
-
-    # === Инициализация сообщения для лобби Бункера ===
-    await bunker_new.ensure_lobby_message(bot)
 
     if not update_status_task.is_running():
         update_status_task.start()
