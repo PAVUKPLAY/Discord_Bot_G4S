@@ -2,6 +2,7 @@ import discord
 import aiohttp
 import logging
 from discord import FFmpegPCMAudio, ui
+from urllib.parse import urlparse
 from config import RADIO_VOICE_CHANNEL_ID, RADIO_TEXT_CHANNEL_ID, RADIO_DEFAULT_STATION
 
 logger = logging.getLogger(__name__)
@@ -13,18 +14,52 @@ FFMPEG_OPTIONS = {
     "options": "-vn"
 }
 
+AUDIO_EXTENSIONS = (".mp3", ".aac", ".ogg", ".m3u8", ".m3u", ".pls", ".opus", ".flac", ".wav", ".mp4", ".webm")
+STREAM_KEYWORDS = ("stream", "live", "radio", "listen", "air", "broadcast", "play", "icecast", "shoutcast", "audio")
+
+
+def _classify_url(url: str):
+    """
+    Пытается определить, является ли URL аудиопотоком.
+    Возвращает True (поток), False (веб-страница) или None (неясно).
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if not parsed.scheme or not parsed.netloc:
+        return False
+    path = (parsed.path or "").lower()
+
+    # Явные признаки потока
+    if any(path.endswith(ext) for ext in AUDIO_EXTENSIONS):
+        return True
+    if parsed.port and parsed.port in (8000, 8001, 8080, 8443, 9000):
+        return True
+    if any(kw in path for kw in STREAM_KEYWORDS):
+        return True
+
+    # Явные признаки веб-страницы (главная страница сайта)
+    if path in ("", "/", "/index.html", "/index.htm", "/index.php"):
+        return False
+
+    # Неясно — например /radio1 без расширения, может быть потоком
+    return None
+
 
 class RadioManager:
     def __init__(self):
         self.voice_clients: dict[int, discord.VoiceClient] = {}
         self.current_stations: dict[int, str] = {}
         self.control_messages: dict[int, discord.Message] = {}
+        self.bot = None
 
     async def search_station(self, query: str):
+        """Ищет станцию, пропуская те, у которых URL — веб-страница."""
         url = f"{RADIO_API_BASE}/stations/search"
         params = {
             "name": query,
-            "limit": 5,
+            "limit": 20,
             "hidebroken": "true",
             "order": "clickcount",
             "reverse": "true"
@@ -37,18 +72,27 @@ class RadioManager:
                         return None
                     stations = await resp.json()
                     for st in stations:
+                        if st.get("lastcheckok", 1) == 0:
+                            continue
                         stream_url = st.get("url_resolved") or st.get("url")
-                        if stream_url and stream_url.startswith(("http://", "https://")):
-                            return {
-                                "name": st.get("name", "Неизвестная станция"),
-                                "url": stream_url,
-                            }
+                        if not stream_url or not stream_url.startswith(("http://", "https://")):
+                            continue
+                        if _classify_url(stream_url) is not True:
+                            logger.debug(
+                                f"Пропускаем станцию '{st.get('name')}': URL не похож на поток ({stream_url})"
+                            )
+                            continue
+                        return {
+                            "name": st.get("name", "Неизвестная станция"),
+                            "url": stream_url,
+                        }
                     return None
         except Exception as e:
             logger.error(f"Ошибка поиска станции '{query}': {e}")
             return None
 
     async def resolve_station(self, query: str):
+        query = query.strip()
         if query.startswith(("http://", "https://")):
             return (query, query)
         st = await self.search_station(query)
@@ -76,7 +120,34 @@ class RadioManager:
             logger.error(f"Voice connect error: {e}")
             return None
 
-    async def play_url(self, guild_id: int, url: str, name: str) -> bool:
+    def _after_play(self, error, guild_id: int, name: str, channel_id: int = None):
+        """Callback, который discord.py вызовет, когда FFmpeg завершится."""
+        try:
+            if error:
+                if self.current_stations.get(guild_id) == name:
+                    logger.error(f"Ошибка воспроизведения '{name}': {error}")
+                    self.current_stations.pop(guild_id, None)
+                    if self.bot and channel_id:
+                        import asyncio
+                        asyncio.run_coroutine_threadsafe(
+                            self._notify_error(channel_id, name),
+                            self.bot.loop
+                        )
+        except Exception as e:
+            logger.error(f"Ошибка в after callback: {e}")
+
+    async def _notify_error(self, channel_id: int, name: str):
+        try:
+            channel = self.bot.get_channel(channel_id)
+            if channel:
+                await channel.send(
+                    f"⚠️ Не удалось воспроизвести «{name}». "
+                    f"Поток недоступен или не является аудио. Попробуйте другую станцию."
+                )
+        except Exception as e:
+            logger.error(f"Ошибка уведомления: {e}")
+
+    async def play_url(self, guild_id: int, url: str, name: str, notify_channel_id: int = None) -> bool:
         vc = self.voice_clients.get(guild_id)
         if not vc or not vc.is_connected():
             return False
@@ -84,7 +155,7 @@ class RadioManager:
             vc.stop()
         try:
             source = FFmpegPCMAudio(url, **FFMPEG_OPTIONS)
-            vc.play(source)
+            vc.play(source, after=lambda e: self._after_play(e, guild_id, name, notify_channel_id))
             self.current_stations[guild_id] = name
             logger.info(f"Играет '{name}' в гильдии {guild_id}")
             return True
@@ -96,11 +167,27 @@ class RadioManager:
         vc = self.voice_clients.get(guild_id)
         if not vc or not vc.is_connected():
             return "❌ Бот не подключён к голосовому каналу."
+
+        query = query.strip()
+
+        # Если пользователь ввёл URL напрямую — проверяем, что он не похож на веб-страницу
+        if query.startswith(("http://", "https://")):
+            classification = _classify_url(query)
+            if classification is False:
+                return (
+                    f"❌ URL «{query}» похож на веб-страницу, а не на аудиопоток.\n"
+                    f"Укажите прямую ссылку на поток — обычно она заканчивается на "
+                    f"`.mp3`, `.m3u8` или содержит `:8000/`."
+                )
+
         resolved = await self.resolve_station(query)
         if not resolved:
-            return f"❌ Станция «{query}» не найдена."
+            return (
+                f"❌ Станция «{query}» не найдена. Попробуйте другое название "
+                f"(например, `Radio Record`, `Europa Plus`, `DFM`) или укажите прямой URL потока."
+            )
         name, url = resolved
-        ok = await self.play_url(guild_id, url, name)
+        ok = await self.play_url(guild_id, url, name, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
         return f"📻 Воспроизводится: **{name}**" if ok else "❌ Не удалось запустить поток."
 
     async def toggle_pause(self, guild_id: int) -> str:
@@ -126,6 +213,7 @@ class RadioManager:
         return "❌ Сейчас ничего не играет."
 
     async def auto_start(self, bot):
+        self.bot = bot
         if not RADIO_VOICE_CHANNEL_ID:
             logger.warning("RADIO_VOICE_CHANNEL_ID не задан — автозапуск радио отключён.")
             return
@@ -146,7 +234,7 @@ class RadioManager:
             resolved = await self.resolve_station(RADIO_DEFAULT_STATION)
             if resolved:
                 name, url = resolved
-                await self.play_url(guild_id, url, name)
+                await self.play_url(guild_id, url, name, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
             else:
                 logger.warning(f"Станция по умолчанию '{RADIO_DEFAULT_STATION}' не найдена.")
 
@@ -208,7 +296,7 @@ class RadioManager:
 class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
     station = ui.TextInput(
         label="Название станции или URL",
-        placeholder="Например: Radio Record или https://stream.example.com/radio.mp3",
+        placeholder="Например: Radio Record, Europa Plus или https://stream.example.com/radio.mp3",
         required=True,
         max_length=200
     )
