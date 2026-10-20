@@ -59,6 +59,11 @@ async def slash_help(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
+        name="📅 События (смежки)",
+        value="Модераторы могут создавать смежки через кнопку в канале событий. Участники подтверждают участие реакциями ✅ / ❌.",
+        inline=False
+    )
+    embed.add_field(
         name="❓ Эта справка",
         value="Используйте **`/help`** в любом канале.",
         inline=False
