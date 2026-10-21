@@ -349,15 +349,17 @@ class RestartConfirmModal(ui.Modal, title='Подтверждение перез
 
 # ==================== ПАНЕЛЬ УПРАВЛЕНИЯ ====================
 class DashboardView(ui.View):
-    def __init__(self):
+    def __init__(self, radio_manager=None):
         super().__init__(timeout=None)
+        self.radio_manager = radio_manager
         self.update_buttons()
 
     def update_buttons(self):
         self.clear_items()
         features = {
             "ai_enabled": ("🤖 AI-чат", discord.ButtonStyle.green, discord.ButtonStyle.red),
-            "monitor_enabled": ("🛡️ Мониторинг", discord.ButtonStyle.green, discord.ButtonStyle.red)
+            "monitor_enabled": ("🛡️ Мониторинг", discord.ButtonStyle.green, discord.ButtonStyle.red),
+            "radio_enabled": ("📻 Радио", discord.ButtonStyle.green, discord.ButtonStyle.red)
         }
         for feature, (label, on_style, off_style) in features.items():
             status = get_status(feature, True)
@@ -380,6 +382,15 @@ class DashboardView(ui.View):
             current = get_status(feature, True)
             new_status = not current
             set_status(feature, new_status)
+            
+            if feature == "radio_enabled":
+                if not new_status:
+                    if self.radio_manager:
+                        await self.radio_manager.disconnect_voice(interaction.guild_id)
+                else:
+                    if self.radio_manager:
+                        asyncio.create_task(self.radio_manager.auto_start(interaction.client))
+
             self.update_buttons()
             embed = discord.Embed(
                 title="📋 Панель управления ботом",
@@ -399,7 +410,7 @@ class DashboardView(ui.View):
             return
         await interaction.response.send_modal(RestartConfirmModal())
 
-async def setup_dashboard(bot):
+async def setup_dashboard(bot, radio_manager=None):
     if not EVENT_CHANNEL_ID:
         logger.warning("EVENT_CHANNEL_ID не задан, панель управления не создана.")
         return
@@ -416,7 +427,7 @@ async def setup_dashboard(bot):
             for row in msg.components:
                 for comp in row.children:
                     if hasattr(comp, 'custom_id') and comp.custom_id.startswith('toggle_'):
-                        view = DashboardView()
+                        view = DashboardView(radio_manager)
                         embed = discord.Embed(
                             title="📋 Панель управления ботом",
                             description="Управляйте функциями бота через кнопки ниже. Статус каждой функции отображается на кнопке.",
@@ -427,7 +438,7 @@ async def setup_dashboard(bot):
                         await msg.edit(embed=embed, view=view)
                         logger.info("Обновлено существующее сообщение панели управления")
                         return
-    view = DashboardView()
+    view = DashboardView(radio_manager)
     embed = discord.Embed(
         title="📋 Панель управления ботом",
         description="Управляйте функциями бота через кнопки ниже. Статус каждой функции отображается на кнопке.",
