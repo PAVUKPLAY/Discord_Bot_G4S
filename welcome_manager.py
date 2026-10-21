@@ -82,15 +82,33 @@ class ApplicationActions(ui.View):
             await interaction.response.send_message("❌ Роль бойца не настроена. Обратитесь к администратору.", ephemeral=True)
             return
 
+        # 1. Выдаем роль
         await member.add_roles(role)
+        
+        # 2. Меняем никнейм (добавляем префикс [G4S])
+        current_nick = member.display_name
+        if not current_nick.startswith("[G4S]"):
+            new_nick = f"[G4S] {current_nick}"
+            # Discord ограничивает длину ника 32 символами
+            if len(new_nick) > 32:
+                new_nick = new_nick[:32]
+            
+            try:
+                await member.edit(nick=new_nick)
+                logger.info(f"Никнейм пользователя {current_nick} изменён на {new_nick}")
+            except discord.Forbidden:
+                logger.warning(f"Не удалось изменить ник {current_nick}: у бота нет прав (или роль бота ниже роли пользователя).")
+            except Exception as e:
+                logger.error(f"Ошибка при изменении ника {current_nick}: {e}")
+
         app["status"] = "accepted"
         logger.info(f"Заявка {self.app_id} принята модератором {interaction.user}")
 
         await interaction.message.delete()
-        await interaction.response.send_message(f"✅ Заявка принята! Пользователь {member.display_name} получил роль бойца.", ephemeral=True)
+        await interaction.response.send_message(f"✅ Заявка принята! Пользователь {member.display_name} получил роль бойца и префикс [G4S].", ephemeral=True)
 
         try:
-            await member.send(f"🎉 Поздравляем! Ваша заявка в отряд **принята**! Добро пожаловать в ряды бойцов G4S!")
+            await member.send(f"🎉 Поздравляем! Ваша заявка в отряд **принята**! Добро пожаловать в ряды бойцов G4S!\nВаш никнейм был изменён на стандарт отряда.")
         except:
             pass
 
