@@ -108,7 +108,6 @@ async def cancel_event(bot, event_id):
     event['is_cancelled'] = True
     save_events(events)
 
-    # Уведомление в канал
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
     if channel:
         embed = discord.Embed(
@@ -119,7 +118,6 @@ async def cancel_event(bot, event_id):
         embed.set_footer(text="Code by PAVUK")
         await channel.send(embed=embed)
 
-    # Обновление оригинального сообщения
     try:
         ev_channel = bot.get_channel(event['channel_id'])
         msg = await ev_channel.fetch_message(event['message_id'])
@@ -137,10 +135,14 @@ async def reschedule_event(bot, event_id, new_date, new_time):
     dt_str = f"{new_date} {new_time}"
     event_dt = datetime.strptime(dt_str, "%d.%m.%Y %H:%M")
     event['datetime'] = event_dt.isoformat()
-    event['reminded'] = False # Сбрасываем флаг, чтобы бот снова напомнил за сутки
+    
+    # Сбрасываем флаги напоминаний, чтобы они сработали заново
+    event['reminded_24h'] = False
+    event['reminded_1h'] = False
+    event['reminded_start'] = False
+    
     save_events(events)
 
-    # Уведомление в канал
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
     if channel:
         embed = discord.Embed(
@@ -151,7 +153,6 @@ async def reschedule_event(bot, event_id, new_date, new_time):
         embed.set_footer(text="Code by PAVUK")
         await channel.send(embed=embed)
 
-    # Обновление оригинального сообщения
     try:
         ev_channel = bot.get_channel(event['channel_id'])
         msg = await ev_channel.fetch_message(event['message_id'])
@@ -193,7 +194,9 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
                 'non_participants': set(),
                 'message_id': None,
                 'channel_id': ANNOUNCE_CHANNEL_ID,
-                'reminded': False,
+                'reminded_24h': False,
+                'reminded_1h': False,
+                'reminded_start': False,
                 'is_cancelled': False
             }
             save_events(events)
@@ -339,7 +342,6 @@ async def setup_event_button(bot):
                 for comp in row.children:
                     if hasattr(comp, 'custom_id') and comp.custom_id == 'create_event_button':
                         found = True
-                        # Обновляем старое сообщение, если там нет новых кнопок
                         if len(msg.components[0].children) < 3:
                             embed = discord.Embed(
                                 title="📢 Управление смежками",
@@ -388,30 +390,69 @@ async def cleanup_event_button(bot):
 
     await setup_event_button(bot)
 
+# ==================== ФОНОВАЯ ЗАДАЧА НАПОМИНАНИЙ ====================
+
+async def send_reminder(bot, event, title, description, color):
+    channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+    if not channel: return
+    embed = discord.Embed(title=title, description=description, color=color)
+    embed.set_footer(text="Code by PAVUK")
+    content = "@everyone" if PING_EVERYONE else None
+    await channel.send(content=content, embed=embed)
+
 async def reminder_task(bot):
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.now()
         for eid, event in list(events.items()):
-            if event.get('reminded', False) or event.get('is_cancelled', False):
+            if event.get('is_cancelled', False):
                 continue
-            event_dt = datetime.fromisoformat(event['datetime'])
-            delta = event_dt - now
-            if 23*3600 <= delta.total_seconds() <= 25*3600:
-                channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
-                if channel:
-                    embed = discord.Embed(
-                        title="🔔 Напоминание о смежке!",
-                        description=f"**{event['title']}** состоится **завтра** в **{event['time']}** (МСК).\nНе забудьте подтвердить участие!",
-                        color=discord.Color.orange()
-                    )
-                    embed.set_footer(text="Code by PAVUK")
-                    content = "@everyone" if PING_EVERYONE else None
-                    await channel.send(content=content, embed=embed)
-                    event['reminded'] = True
-                    save_events(events)
-                    logger.info(f"Отправлено напоминание о событии {eid}")
-        await asyncio.sleep(60)
+
+            try:
+                event_dt = datetime.fromisoformat(event['datetime'])
+            except Exception:
+                continue
+
+            delta = (event_dt - now).total_seconds()
+
+            # Если мероприятие прошло более 2 часов назад, пропускаем
+            if delta < -2 * 3600:
+                continue
+
+            # 1. Напоминание за 24 часа (если осталось меньше 24 часов, но больше 1 часа)
+            if not event.get('reminded_24h', False) and 1 * 3600 < delta <= 24 * 3600:
+                await send_reminder(
+                    bot, event,
+                    title="📅 Напоминание о смежке!",
+                    description=f"**{event['title']}** состоится **завтра** в **{event['time']}** (МСК).\nНе забудьте подтвердить участие!",
+                    color=discord.Color.orange()
+                )
+                event['reminded_24h'] = True
+                save_events(events)
+
+            # 2. Напоминание за 1 час (если осталось меньше 1 часа, но больше 5 минут)
+            elif not event.get('reminded_1h', False) and 5 * 60 < delta <= 1 * 3600:
+                await send_reminder(
+                    bot, event,
+                    title="⏳ Скоро начало!",
+                    description=f"Мероприятие **{event['title']}** начнется **через 1 час** (в **{event['time']}** МСК).\nГотовьтесь!",
+                    color=discord.Color.blue()
+                )
+                event['reminded_1h'] = True
+                save_events(events)
+
+            # 3. Напоминание о начале (если осталось меньше 5 минут или уже началось, но не прошло 2 часа)
+            elif not event.get('reminded_start', False) and -2 * 3600 <= delta <= 5 * 60:
+                await send_reminder(
+                    bot, event,
+                    title="🚀 Мероприятие началось!",
+                    description=f"Мероприятие **{event['title']}** **уже началось**!\nПрисоединяйтесь к каналу!",
+                    color=discord.Color.green()
+                )
+                event['reminded_start'] = True
+                save_events(events)
+
+        await asyncio.sleep(30) # Проверяем каждые 30 секунд
 
 async def on_reaction_add(reaction, user):
     if user.bot: return
