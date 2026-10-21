@@ -375,7 +375,7 @@ class RadioManager:
             ),
             color=discord.Color.purple()
         )
-        embed.set_footer(text="Смена станции — участники голосового канала • Пауза/Стоп — модераторы в голосовом канале")
+        embed.set_footer(text="Смена станции — участники • Пауза/Стоп — модераторы | Code by PAVUK")
         return embed
 
     async def ensure_control_panel(self, bot, channel_id: int):
