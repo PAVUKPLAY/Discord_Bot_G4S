@@ -72,7 +72,7 @@ async def slash_help(interaction: discord.Interaction):
         value="Модераторы могут создавать смежки через кнопку в канале событий. Участники подтверждают участие реакциями ✅ / ❌.",
         inline=False
     )
-    embed.set_footer(text="G4S Командование • v1.0")
+    embed.set_footer(text="G4S Командование • v1.0 | Code by PAVUK")
     await interaction.response.send_message(embed=embed, ephemeral=True)
     logger.info(f"Пользователь {interaction.user} запросил справку")
 
