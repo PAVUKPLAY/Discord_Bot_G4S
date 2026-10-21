@@ -91,11 +91,10 @@ class RadioManager:
         return PCMVolumeTransformer(raw, volume=self._get_volume(guild_id))
 
     async def search_stations(self, query: str) -> list:
-        """Ищет до 5 станций и возвращает список."""
         url = f"{RADIO_API_BASE}/stations/search"
         params = {
             "name": query,
-            "limit": 20, # Берем с запасом, чтобы отфильтровать мусор
+            "limit": 20,
             "hidebroken": "true",
             "order": "clickcount",
             "reverse": "true"
@@ -120,7 +119,6 @@ class RadioManager:
                             continue
                             
                         name = st.get("name", "Неизвестная станция")
-                        # Пропускаем дубликаты по имени
                         if name.lower() in seen_names:
                             continue
                             
@@ -307,7 +305,6 @@ class RadioManager:
             return
         guild_id = channel.guild.id
         if RADIO_DEFAULT_STATION:
-            # Для автозапуска просто ищем и играем первую попавшуюся
             stations = await self.search_stations(RADIO_DEFAULT_STATION)
             if stations:
                 name, url = stations[0]["name"], stations[0]["url"]
@@ -349,7 +346,6 @@ class RadioManager:
                 return
         guild_id = channel.guild.id
 
-        # Удаляем старые панели
         async for msg in channel.history(limit=50):
             if msg.author == bot.user and msg.components:
                 for row in msg.components:
@@ -378,6 +374,145 @@ class RadioManager:
             logger.error(f"Ошибка обновления панели: {e}")
 
 
+# ==================== ГОЛОСОВАНИЕ И ВЫБОР ====================
+
+class OpenChangeModalView(ui.View):
+    def __init__(self, radio_manager: RadioManager):
+        super().__init__(timeout=120)
+        self.radio_manager = radio_manager
+
+    @ui.button(label="Выбрать станцию", style=discord.ButtonStyle.primary)
+    async def open_modal(self, interaction: discord.Interaction, button: ui.Button):
+        if not await _ensure_user_in_bot_voice(interaction, self.radio_manager):
+            return
+        await interaction.response.send_modal(ChangeStationModal(self.radio_manager))
+        self.stop()
+
+
+class RadioChangeVoteView(ui.View):
+    def __init__(self, radio_manager: RadioManager, original_interaction: discord.Interaction, voice_channel: discord.VoiceChannel):
+        super().__init__(timeout=120)
+        self.radio_manager = radio_manager
+        self.original_interaction = original_interaction
+        self.voice_channel = voice_channel
+        self.votes_yes = set()
+        self.votes_no = set()
+        self.message = None
+        
+        vc_members = [m for m in voice_channel.members if not m.bot]
+        self.total_members = len(vc_members)
+        self.required_votes = (self.total_members // 2) + 1
+
+    async def update_vote_embed(self):
+        if not self.message:
+            return
+        embed = self.message.embeds[0]
+        
+        remaining = self.total_members - len(self.votes_yes) - len(self.votes_no)
+        
+        embed.clear_fields()
+        embed.add_field(name="✅ За", value=f"**{len(self.votes_yes)}**", inline=True)
+        embed.add_field(name="❌ Против", value=f"**{len(self.votes_no)}**", inline=True)
+        embed.add_field(name="🤷 Не голосовали", value=f"**{remaining}**", inline=True)
+        
+        try:
+            await self.message.edit(embed=embed, view=self)
+        except Exception:
+            pass
+
+    async def check_result(self, interaction: discord.Interaction) -> bool:
+        """Проверяет, достигнут ли порог или голосование провалено. Возвращает True, если голосование завершено."""
+        # Если набралось нужное количество ЗА
+        if len(self.votes_yes) >= self.required_votes:
+            self.stop()
+            for child in self.children:
+                child.disabled = True
+            await self.update_vote_embed()
+            
+            await interaction.channel.send(f"✅ Голосование пройдено! {self.original_interaction.user.mention} может сменить станцию.")
+            
+            try:
+                await self.original_interaction.followup.send(
+                    "✅ Большинство проголосовало **ЗА**. Вы можете выбрать станцию.",
+                    view=OpenChangeModalView(self.radio_manager),
+                    ephemeral=True
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить followup: {e}")
+            return True
+            
+        # Если оставшихся голосов не хватит, чтобы набрать нужное количество ЗА
+        remaining = self.total_members - len(self.votes_yes) - len(self.votes_no)
+        if len(self.votes_yes) + remaining < self.required_votes:
+            self.stop()
+            for child in self.children:
+                child.disabled = True
+            await self.update_vote_embed()
+            
+            await interaction.channel.send(f"❌ Голосование провалено! Большинство против смены станции.")
+            
+            try:
+                await self.original_interaction.followup.send(
+                    "❌ Участники проголосовали **ПРОТИВ**. Смена станции отменена.",
+                    ephemeral=True
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить followup: {e}")
+            return True
+            
+        return False
+
+    @ui.button(label="✋ Я за", style=discord.ButtonStyle.success, custom_id="radio_vote_yes")
+    async def vote_yes(self, interaction: discord.Interaction, button: ui.Button):
+        if not interaction.user.voice or interaction.user.voice.channel.id != self.voice_channel.id:
+            await interaction.response.send_message("❌ Вы должны находиться в голосовом канале, чтобы голосовать.", ephemeral=True)
+            return
+
+        if interaction.user.id in self.votes_yes:
+            await interaction.response.send_message("❌ Вы уже проголосовали ЗА.", ephemeral=True)
+            return
+
+        if interaction.user.id in self.votes_no:
+            self.votes_no.remove(interaction.user.id)
+
+        self.votes_yes.add(interaction.user.id)
+        await interaction.response.send_message(f"✅ Ваш голос учтен!", ephemeral=True)
+        
+        await self.update_vote_embed()
+        await self.check_result(interaction)
+
+    @ui.button(label="❌ Я против", style=discord.ButtonStyle.danger, custom_id="radio_vote_no")
+    async def vote_no(self, interaction: discord.Interaction, button: ui.Button):
+        if not interaction.user.voice or interaction.user.voice.channel.id != self.voice_channel.id:
+            await interaction.response.send_message("❌ Вы должны находиться в голосовом канале, чтобы голосовать.", ephemeral=True)
+            return
+
+        if interaction.user.id in self.votes_no:
+            await interaction.response.send_message("❌ Вы уже проголосовали ПРОТИВ.", ephemeral=True)
+            return
+
+        if interaction.user.id in self.votes_yes:
+            self.votes_yes.remove(interaction.user.id)
+
+        self.votes_no.add(interaction.user.id)
+        await interaction.response.send_message(f"❌ Ваш голос против учтен!", ephemeral=True)
+        
+        await self.update_vote_embed()
+        await self.check_result(interaction)
+
+    async def on_timeout(self):
+        if self.message:
+            for child in self.children:
+                child.disabled = True
+            try:
+                embed = self.message.embeds[0]
+                embed.color = discord.Color.red()
+                embed.set_footer(text="Время голосования истекло.")
+                await self.message.edit(content="⏳ Время голосования истекло. Смена станции отменена.", embed=embed, view=self)
+            except:
+                pass
+
+
 class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
     station = ui.TextInput(
         label="Название станции или URL",
@@ -397,7 +532,6 @@ class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
         
         query = self.station.value.strip()
         
-        # Если это прямой URL
         if query.startswith(("http://", "https://")):
             if _classify_url(query) is False:
                 await interaction.followup.send(
@@ -405,7 +539,6 @@ class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
                     ephemeral=True
                 )
                 return
-            # Играем сразу
             ok = await self.radio_manager.play_url(interaction.guild_id, query, query, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
             if ok:
                 await interaction.followup.send(f"📻 Воспроизводится прямой поток.", ephemeral=True)
@@ -414,7 +547,6 @@ class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
                 await interaction.followup.send("❌ Не удалось запустить поток.", ephemeral=True)
             return
 
-        # Ищем по названию
         stations = await self.radio_manager.search_stations(query)
         
         if not stations:
@@ -425,7 +557,6 @@ class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
             return
 
         if len(stations) == 1:
-            # Если найдена только одна, запускаем сразу
             name, url = stations[0]["name"], stations[0]["url"]
             ok = await self.radio_manager.play_url(interaction.guild_id, url, name, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
             if ok:
@@ -434,7 +565,6 @@ class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
             else:
                 await interaction.followup.send("❌ Не удалось запустить поток.", ephemeral=True)
         else:
-            # Если несколько, показываем список
             view = StationSelectView(self.radio_manager, stations)
             await interaction.followup.send(
                 f"Найдено несколько станций по запросу «{query}». Выберите нужную:",
@@ -450,7 +580,6 @@ class StationSelect(ui.Select):
         
         options = []
         for i, st in enumerate(stations):
-            # Обрезаем длинные названия для выпадающего списка
             label = st["name"] if len(st["name"]) <= 100 else st["name"][:97] + "..."
             options.append(discord.SelectOption(label=label, value=str(i)))
             
@@ -469,7 +598,6 @@ class StationSelect(ui.Select):
         if ok:
             await interaction.followup.send(f"📻 Воспроизводится: **{station['name']}**", ephemeral=True)
             await self.radio_manager.update_control_panel(interaction.guild_id)
-            # Отключаем селект, чтобы нельзя было нажать дважды
             self.disabled = True
             await interaction.message.edit(view=None)
         else:
@@ -518,7 +646,35 @@ class RadioControlView(ui.View):
     async def change_station(self, interaction: discord.Interaction, button: ui.Button):
         if not await _ensure_user_in_bot_voice(interaction, self.radio_manager):
             return
-        await interaction.response.send_modal(ChangeStationModal(self.radio_manager))
+            
+        vc = self.radio_manager.voice_clients.get(interaction.guild_id)
+        if not vc or not vc.is_connected():
+            return
+
+        vc_members = [m for m in vc.channel.members if not m.bot]
+        
+        if len(vc_members) <= 1:
+            await interaction.response.send_modal(ChangeStationModal(self.radio_manager))
+            return
+            
+        view = RadioChangeVoteView(self.radio_manager, interaction, vc.channel)
+        mentions = " ".join([m.mention for m in vc_members])
+        
+        embed = discord.Embed(
+            title="🗳️ Голосование за смену радио",
+            description=f"Пользователь {interaction.user.mention} хочет сменить радиостанцию.\n"
+                        f"Для смены нужно **больше 50%** голосов (минимум {view.required_votes} из {view.total_members}).\n\n"
+                        f"Голосуйте кнопками ниже:",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="✅ За", value="**0**", inline=True)
+        embed.add_field(name="❌ Против", value="**0**", inline=True)
+        embed.add_field(name="🤷 Не голосовали", value=f"**{view.total_members}**", inline=True)
+        embed.set_footer(text="Code by PAVUK")
+        
+        msg = await interaction.channel.send(content=mentions, embed=embed, view=view)
+        view.message = msg
+        await interaction.response.send_message("Запущено голосование в канале.", ephemeral=True)
 
     @ui.button(label="🔊 Громкость", style=discord.ButtonStyle.secondary, custom_id="radio_volume")
     async def volume(self, interaction: discord.Interaction, button: ui.Button):
