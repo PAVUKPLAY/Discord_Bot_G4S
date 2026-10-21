@@ -188,7 +188,9 @@ class SlotsModal(CasinoModal):
             embed.add_field(name="Изменение", value=f"{'+' if delta > 0 else ''}{fmt(delta)}")
             embed.add_field(name="Баланс", value=fmt(balance))
             embed.set_footer(text="Code by PAVUK")
-            await interaction.response.send_message(embed=embed)
+            
+            # ДОБАВЛЕНО ephemeral=True
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         except ValueError:
             await interaction.response.send_message("❌ Введите корректную ставку числом.", ephemeral=True)
 
@@ -225,7 +227,9 @@ class CoinModal(ui.Modal):
             )
             embed.add_field(name="Баланс", value=fmt(balance))
             embed.set_footer(text="Code by PAVUK")
-            await interaction.response.send_message(embed=embed)
+            
+            # ДОБАВЛЕНО ephemeral=True
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         except ValueError:
             await interaction.response.send_message("❌ Введите корректную ставку числом.", ephemeral=True)
 
@@ -282,7 +286,9 @@ class RouletteModal(ui.Modal):
             embed.add_field(name="Ставка", value=f"{fmt(bet)} на {t.capitalize()}")
             embed.add_field(name="Баланс", value=fmt(balance))
             embed.set_footer(text="Code by PAVUK")
-            await interaction.response.send_message(embed=embed)
+            
+            # ДОБАВЛЕНО ephemeral=True
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         except ValueError:
             await interaction.response.send_message("❌ Проверьте правильность введенных данных (ставка и число должны быть цифрами).", ephemeral=True)
 
@@ -392,7 +398,8 @@ async def setup_casino_panel(bot: commands.Bot):
             "Нажмите на кнопки ниже, чтобы играть.\n\n"
             f"**Минимальная ставка:** {MIN_BET} монет\n"
             f"**Максимальная ставка:** {fmt(MAX_BET)} монет\n\n"
-            "💡 *При первом входе вам начисляется 1000 монет.*"
+            "💡 *При первом входе вам начисляется 1000 монет.*\n"
+            "🔒 *Все результаты игр и баланс видны только вам.*"
         ),
         color=discord.Color.gold()
     )
