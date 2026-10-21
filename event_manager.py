@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 DATA_FILE = os.path.join(DATA_DIR, "events_data.json")
 
-# Убедимся, что папка существует
 os.makedirs(DATA_DIR, exist_ok=True)
 
 def load_events():
@@ -27,11 +26,12 @@ def load_events():
                 for eid, ev in data.items():
                     ev['participants'] = set(ev['participants'])
                     ev['non_participants'] = set(ev['non_participants'])
-                logger.info(f"Загружено {len(data)} событий")
+                logger.info(f"Загружено {len(data)} событий из {DATA_FILE}")
                 return data
             except Exception as e:
                 logger.error(f"Ошибка загрузки событий: {e}")
                 return {}
+    logger.warning(f"Файл {DATA_FILE} не найден — история событий пуста")
     return {}
 
 def save_events(events):
@@ -40,10 +40,14 @@ def save_events(events):
         data[eid] = ev.copy()
         data[eid]['participants'] = list(ev['participants'])
         data[eid]['non_participants'] = list(ev['non_participants'])
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.flush()
-        os.fsync(f.fileno()) # Гарантируем запись на диск
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        logger.info(f"События сохранены в {DATA_FILE}")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения событий: {e}")
 
 events = load_events()
 
@@ -53,11 +57,21 @@ async def update_event_embed(message, event_id):
         logger.warning(f"Попытка обновить несуществующее событие {event_id}")
         return
 
+    is_cancelled = event.get('is_cancelled', False)
+    
+    if is_cancelled:
+        title = f"❌ ОТМЕНЕНО: {event['title']}"
+        color = discord.Color.red()
+        description = f"**Дата:** {event['date']}\n**Время:** {event['time']} (МСК)\n\n**Мероприятие отменено.**"
+    else:
+        title = f"📅 {event['title']}"
+        color = discord.Color.gold()
+        description = f"**Дата:** {event['date']}\n**Время:** {event['time']} (МСК)\n\n**Ставьте реакции:**\n✅ – буду участвовать\n❌ – не смогу"
+
     embed = discord.Embed(
-        title=f"📅 {event['title']}",
-        description=f"**Дата:** {event['date']}\n**Время:** {event['time']} (МСК)\n\n"
-                    f"**Ставьте реакции:**\n✅ – буду участвовать\n❌ – не смогу",
-        color=discord.Color.gold()
+        title=title,
+        description=description,
+        color=color
     )
 
     guild = message.guild
@@ -86,6 +100,67 @@ async def update_event_embed(message, event_id):
     await message.edit(embed=embed)
     logger.debug(f"Обновлён embed события {event_id}")
 
+# ==================== ОТМЕНА И ПЕРЕНОС ====================
+
+async def cancel_event(bot, event_id):
+    event = events.get(event_id)
+    if not event: return
+    event['is_cancelled'] = True
+    save_events(events)
+
+    # Уведомление в канал
+    channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+    if channel:
+        embed = discord.Embed(
+            title="❌ Мероприятие отменено",
+            description=f"Мероприятие **{event['title']}** на {event['date']} в {event['time']} было отменено.",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Code by PAVUK")
+        await channel.send(embed=embed)
+
+    # Обновление оригинального сообщения
+    try:
+        ev_channel = bot.get_channel(event['channel_id'])
+        msg = await ev_channel.fetch_message(event['message_id'])
+        await update_event_embed(msg, event_id)
+        await msg.clear_reactions()
+    except Exception as e:
+        logger.error(f"Не удалось обновить сообщение отмененного события: {e}")
+
+async def reschedule_event(bot, event_id, new_date, new_time):
+    event = events.get(event_id)
+    if not event: return
+    
+    event['date'] = new_date
+    event['time'] = new_time
+    dt_str = f"{new_date} {new_time}"
+    event_dt = datetime.strptime(dt_str, "%d.%m.%Y %H:%M")
+    event['datetime'] = event_dt.isoformat()
+    event['reminded'] = False # Сбрасываем флаг, чтобы бот снова напомнил за сутки
+    save_events(events)
+
+    # Уведомление в канал
+    channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+    if channel:
+        embed = discord.Embed(
+            title="🔄 Мероприятие перенесено",
+            description=f"Мероприятие **{event['title']}** перенесено на **{new_date}** в **{new_time}** (МСК).",
+            color=discord.Color.orange()
+        )
+        embed.set_footer(text="Code by PAVUK")
+        await channel.send(embed=embed)
+
+    # Обновление оригинального сообщения
+    try:
+        ev_channel = bot.get_channel(event['channel_id'])
+        msg = await ev_channel.fetch_message(event['message_id'])
+        await update_event_embed(msg, event_id)
+    except Exception as e:
+        logger.error(f"Не удалось обновить сообщение перенесенного события: {e}")
+
+# ==================== МОДАЛЬНЫЕ ОКНА И СЕЛЕКТЫ ====================
+
 class CreateEventModal(ui.Modal, title='Создание смежки'):
     title_input = ui.TextInput(label='Название смежки', placeholder='Например: Отрядная операция', default='Отрядная смежка')
     date_input = ui.TextInput(label='Дата (ДД.ММ.ГГГГ)', placeholder='25.12.2025')
@@ -95,7 +170,6 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
         try:
             if not ANNOUNCE_CHANNEL_ID:
                 await interaction.response.send_message('❌ Канал для объявлений не настроен.', ephemeral=True)
-                logger.error("Попытка создать смежку без ANNOUNCE_CHANNEL_ID")
                 return
             if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', self.date_input.value):
                 await interaction.response.send_message('❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ', ephemeral=True)
@@ -119,7 +193,8 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
                 'non_participants': set(),
                 'message_id': None,
                 'channel_id': ANNOUNCE_CHANNEL_ID,
-                'reminded': False
+                'reminded': False,
+                'is_cancelled': False
             }
             save_events(events)
 
@@ -136,7 +211,6 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             channel = interaction.guild.get_channel(ANNOUNCE_CHANNEL_ID)
             if not channel:
                 await interaction.response.send_message('❌ Канал объявлений не найден.', ephemeral=True)
-                logger.error(f"Канал {ANNOUNCE_CHANNEL_ID} не найден для события {event_id}")
                 return
 
             content = "@everyone" if PING_EVERYONE else None
@@ -148,32 +222,100 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             await msg.add_reaction('❌')
 
             await interaction.response.send_message(f'✅ Смежка создана! Объявление отправлено в канал {channel.mention}', ephemeral=True)
-            logger.info(f"Создано событие {event_id} пользователем {interaction.user} (дата {self.date_input.value} {self.time_input.value})")
+            logger.info(f"Создано событие {event_id} пользователем {interaction.user}")
         except Exception as e:
             logger.error(f"Ошибка в on_submit: {e}")
             await interaction.response.send_message(f'❌ Произошла ошибка: {e}', ephemeral=True)
 
-class CreateEventButton(ui.View):
+class RescheduleEventModal(ui.Modal, title='Перенос мероприятия'):
+    date_input = ui.TextInput(label='Новая дата (ДД.ММ.ГГГГ)', placeholder='25.12.2025')
+    time_input = ui.TextInput(label='Новое время (ЧЧ:ММ) по МСК', placeholder='19:00')
+
+    def __init__(self, event_id):
+        super().__init__()
+        self.event_id = event_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', self.date_input.value):
+            await interaction.response.send_message('❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ', ephemeral=True)
+            return
+        if not re.match(r'^\d{2}:\d{2}$', self.time_input.value):
+            await interaction.response.send_message('❌ Неверный формат времени. Используйте ЧЧ:ММ', ephemeral=True)
+            return
+        try:
+            datetime.strptime(f"{self.date_input.value} {self.time_input.value}", "%d.%m.%Y %H:%M")
+        except ValueError:
+            await interaction.response.send_message('❌ Некорректная дата или время.', ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await reschedule_event(interaction.client, self.event_id, self.date_input.value, self.time_input.value)
+        await interaction.followup.send(f"✅ Мероприятие успешно перенесено.", ephemeral=True)
+
+class EventCancelSelect(ui.Select):
+    def __init__(self, active_events):
+        options = []
+        for eid, ev in active_events.items():
+            options.append(discord.SelectOption(label=ev['title'], description=f"{ev['date']} {ev['time']}", value=eid))
+        super().__init__(placeholder="Выберите мероприятие для отмены...", options=options[:25])
+
+    async def callback(self, interaction: discord.Interaction):
+        event_id = self.values[0]
+        await interaction.response.defer(ephemeral=True)
+        await cancel_event(interaction.client, event_id)
+        await interaction.followup.send(f"✅ Мероприятие отменено.", ephemeral=True)
+
+class EventRescheduleSelect(ui.Select):
+    def __init__(self, active_events):
+        options = []
+        for eid, ev in active_events.items():
+            options.append(discord.SelectOption(label=ev['title'], description=f"{ev['date']} {ev['time']}", value=eid))
+        super().__init__(placeholder="Выберите мероприятие для переноса...", options=options[:25])
+
+    async def callback(self, interaction: discord.Interaction):
+        event_id = self.values[0]
+        await interaction.response.send_modal(RescheduleEventModal(event_id))
+
+# ==================== ГЛАВНАЯ ПАНЕЛЬ СМЕЖЕК ====================
+
+class CreateEventView(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @ui.button(label='➕ Создать смежку', style=discord.ButtonStyle.primary, custom_id='create_event_button')
     async def create_button(self, interaction: discord.Interaction, button: ui.Button):
         if not has_moderator_role(interaction.user):
-            await interaction.response.send_message("❌ У вас недостаточно прав для создания смежки.", ephemeral=True)
-            logger.warning(f"Пользователь {interaction.user} пытался создать смежку без прав")
+            await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
             return
-        try:
-            logger.info(f"Нажата кнопка создания смежки от {interaction.user.display_name}")
-            modal = CreateEventModal()
-            await interaction.response.send_modal(modal)
-            logger.debug("Модальное окно отправлено успешно")
-        except Exception as e:
-            logger.error(f"Ошибка при создании модального окна: {e}")
-            try:
-                await interaction.response.send_message(f"❌ Ошибка: {e}", ephemeral=True)
-            except discord.errors.InteractionResponded:
-                await interaction.followup.send(f"❌ Ошибка: {e}", ephemeral=True)
+        await interaction.response.send_modal(CreateEventModal())
+
+    @ui.button(label='❌ Отменить', style=discord.ButtonStyle.danger, custom_id='cancel_event_button')
+    async def cancel_button(self, interaction: discord.Interaction, button: ui.Button):
+        if not has_moderator_role(interaction.user):
+            await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
+            return
+        active_events = {k: v for k, v in events.items() if not v.get('is_cancelled', False)}
+        if not active_events:
+            await interaction.response.send_message("Нет активных мероприятий для отмены.", ephemeral=True)
+            return
+        
+        view = ui.View()
+        view.add_item(EventCancelSelect(active_events))
+        await interaction.response.send_message("Выберите мероприятие, которое нужно отменить:", view=view, ephemeral=True)
+
+    @ui.button(label='🔄 Перенести', style=discord.ButtonStyle.secondary, custom_id='reschedule_event_button')
+    async def reschedule_button(self, interaction: discord.Interaction, button: ui.Button):
+        if not has_moderator_role(interaction.user):
+            await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
+            return
+        active_events = {k: v for k, v in events.items() if not v.get('is_cancelled', False)}
+        if not active_events:
+            await interaction.response.send_message("Нет активных мероприятий для переноса.", ephemeral=True)
+            return
+        
+        view = ui.View()
+        view.add_item(EventRescheduleSelect(active_events))
+        await interaction.response.send_message("Выберите мероприятие, которое нужно перенести:", view=view, ephemeral=True)
 
 async def setup_event_button(bot):
     if not EVENT_CHANNEL_ID:
@@ -188,7 +330,7 @@ async def setup_event_button(bot):
             logger.error(f"Не удалось найти канал с ID {EVENT_CHANNEL_ID}: {e}")
             return
 
-    logger.info(f"Проверяем канал {channel.name} (ID: {channel.id}) на наличие кнопки...")
+    logger.info(f"Проверяем канал {channel.name} (ID: {channel.id}) на наличие панели смежек...")
 
     found = False
     async for msg in channel.history(limit=30):
@@ -197,37 +339,41 @@ async def setup_event_button(bot):
                 for comp in row.children:
                     if hasattr(comp, 'custom_id') and comp.custom_id == 'create_event_button':
                         found = True
-                        logger.info(f"Найдено существующее сообщение с кнопкой (ID: {msg.id})")
+                        # Обновляем старое сообщение, если там нет новых кнопок
+                        if len(msg.components[0].children) < 3:
+                            embed = discord.Embed(
+                                title="📢 Управление смежками",
+                                description="Нажмите на кнопку ниже, чтобы создать, отменить или перенести событие для отряда.",
+                                color=discord.Color.blue()
+                            )
+                            embed.set_footer(text="Code by PAVUK")
+                            await msg.edit(embed=embed, view=CreateEventView())
+                            logger.info("Старая панель смежек обновлена (добавлены кнопки).")
                         break
-                if found:
-                    break
-        if found:
-            break
+                if found: break
+        if found: break
 
     if found:
         return
 
-    logger.info("Отправляем новое сообщение с кнопкой...")
+    logger.info("Отправляем новое сообщение с кнопками смежек...")
     embed = discord.Embed(
-        title="📢 Создание смежки",
-        description="Нажмите на кнопку ниже, чтобы создать новое событие для отряда.",
+        title="📢 Управление смежками",
+        description="Нажмите на кнопку ниже, чтобы создать, отменить или перенести событие для отряда.",
         color=discord.Color.blue()
     )
     embed.set_footer(text="Code by PAVUK")
-    view = CreateEventButton()
-    await channel.send(embed=embed, view=view)
-    logger.info("Постоянная кнопка 'Создать смежку' размещена.")
+    await channel.send(embed=embed, view=CreateEventView())
+    logger.info("Постоянная панель смежек размещена.")
 
 async def cleanup_event_button(bot):
     if not EVENT_CHANNEL_ID:
-        logger.warning("EVENT_CHANNEL_ID не задан. Пропускаем очистку.")
         return
     channel = bot.get_channel(EVENT_CHANNEL_ID)
     if not channel:
         try:
             channel = await bot.fetch_channel(EVENT_CHANNEL_ID)
-        except Exception as e:
-            logger.error(f"Не удалось найти канал с ID {EVENT_CHANNEL_ID}: {e}")
+        except Exception:
             return
 
     logger.info("Удаляем старые сообщения с кнопкой...")
@@ -247,7 +393,7 @@ async def reminder_task(bot):
     while not bot.is_closed():
         now = datetime.now()
         for eid, event in list(events.items()):
-            if event.get('reminded', False):
+            if event.get('reminded', False) or event.get('is_cancelled', False):
                 continue
             event_dt = datetime.fromisoformat(event['datetime'])
             delta = event_dt - now
@@ -268,19 +414,21 @@ async def reminder_task(bot):
         await asyncio.sleep(60)
 
 async def on_reaction_add(reaction, user):
-    if user.bot:
-        return
+    if user.bot: return
     event_id = None
     for eid, ev in events.items():
         if ev['message_id'] == reaction.message.id:
             event_id = eid
             break
-    if not event_id:
-        return
-    if str(reaction.emoji) not in ('✅', '❌'):
-        return
+    if not event_id: return
+    if str(reaction.emoji) not in ('✅', '❌'): return
 
     event = events[event_id]
+    if event.get('is_cancelled', False):
+        try: await reaction.remove(user)
+        except: pass
+        return
+
     if str(reaction.emoji) == '✅':
         if user.id in event['non_participants']:
             event['non_participants'].remove(user.id)
@@ -292,20 +440,19 @@ async def on_reaction_add(reaction, user):
 
     save_events(events)
     await update_event_embed(reaction.message, event_id)
-    logger.info(f"Пользователь {user.display_name} {reaction.emoji} на событие {event_id}")
 
 async def on_reaction_remove(reaction, user):
-    if user.bot:
-        return
+    if user.bot: return
     event_id = None
     for eid, ev in events.items():
         if ev['message_id'] == reaction.message.id:
             event_id = eid
             break
-    if not event_id:
-        return
+    if not event_id: return
 
     event = events[event_id]
+    if event.get('is_cancelled', False): return
+
     if str(reaction.emoji) == '✅':
         if user.id in event['participants']:
             event['participants'].remove(user.id)
@@ -315,43 +462,30 @@ async def on_reaction_remove(reaction, user):
 
     save_events(events)
     await update_event_embed(reaction.message, event_id)
-    logger.info(f"Пользователь {user.display_name} убрал {reaction.emoji} с события {event_id}")
 
 async def sync_events(bot):
     for eid, event in events.items():
         channel = bot.get_channel(event['channel_id'])
-        if not channel:
-            continue
+        if not channel: continue
         try:
             msg = await channel.fetch_message(event['message_id'])
             await update_event_embed(msg, eid)
-            logger.debug(f"Синхронизировано событие {eid}")
-        except Exception as e:
-            logger.warning(f"Не удалось синхронизировать событие {eid}: {e}")
+        except Exception: pass
 
-# ==================== МОДАЛЬНОЕ ОКНО ПОДТВЕРЖДЕНИЯ РЕСТАРТА ====================
+# ==================== ПАНЕЛЬ УПРАВЛЕНИЯ БОТОМ ====================
+
 class RestartConfirmModal(ui.Modal, title='Подтверждение перезапуска'):
-    confirm = ui.TextInput(
-        label='Введите "ДА" для подтверждения',
-        placeholder='ДА',
-        min_length=2,
-        max_length=2,
-        required=True
-    )
-
+    confirm = ui.TextInput(label='Введите "ДА" для подтверждения', min_length=2, max_length=2)
     async def on_submit(self, interaction: discord.Interaction):
         if self.confirm.value.upper() == 'ДА':
             await interaction.response.send_message("🔄 Перезапуск бота...", ephemeral=True)
-            logger.info(f"Бот перезапущен пользователем {interaction.user}")
             save_events(events)
             import sys
-            bot = interaction.client
-            await bot.close()
+            await interaction.client.close()
             sys.exit(0)
         else:
-            await interaction.response.send_message("❌ Перезапуск отменён.", ephemeral=True)
+            await interaction.response.send_message("❌ Отменено.", ephemeral=True)
 
-# ==================== ПАНЕЛЬ УПРАВЛЕНИЯ ====================
 class DashboardView(ui.View):
     def __init__(self, radio_manager=None):
         super().__init__(timeout=None)
@@ -368,8 +502,7 @@ class DashboardView(ui.View):
         for feature, (label, on_style, off_style) in features.items():
             status = get_status(feature, True)
             style = on_style if status else off_style
-            button_label = f"{label}: {'ВКЛ' if status else 'ВЫКЛ'}"
-            button = ui.Button(label=button_label, style=style, custom_id=f"toggle_{feature}")
+            button = ui.Button(label=f"{label}: {'ВКЛ' if status else 'ВЫКЛ'}", style=style, custom_id=f"toggle_{feature}")
             button.callback = self.make_callback(feature)
             self.add_item(button)
 
@@ -380,51 +513,35 @@ class DashboardView(ui.View):
     def make_callback(self, feature):
         async def callback(interaction: discord.Interaction):
             if not has_moderator_role(interaction.user):
-                await interaction.response.send_message("❌ У вас недостаточно прав для управления панелью.", ephemeral=True)
-                logger.warning(f"Пользователь {interaction.user} пытался управлять панелью без прав")
+                await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
                 return
-            current = get_status(feature, True)
-            new_status = not current
+            new_status = not get_status(feature, True)
             set_status(feature, new_status)
             
             if feature == "radio_enabled":
-                if not new_status:
-                    if self.radio_manager:
-                        await self.radio_manager.disconnect_voice(interaction.guild_id)
-                else:
-                    if self.radio_manager:
-                        asyncio.create_task(self.radio_manager.auto_start(interaction.client))
+                if not new_status and self.radio_manager:
+                    await self.radio_manager.disconnect_voice(interaction.guild_id)
+                elif new_status and self.radio_manager:
+                    asyncio.create_task(self.radio_manager.auto_start(interaction.client))
 
             self.update_buttons()
-            embed = discord.Embed(
-                title="📋 Панель управления ботом",
-                description="Управляйте функциями бота через кнопки ниже. Статус каждой функции отображается на кнопке.",
-                color=discord.Color.blue()
-            )
-            embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
+            embed = discord.Embed(title="📋 Панель управления ботом", description="Управляйте функциями бота.", color=discord.Color.blue())
             embed.set_footer(text="G4S Командование | Code by PAVUK")
             await interaction.response.edit_message(embed=embed, view=self)
-            logger.info(f"Пользователь {interaction.user} переключил {feature} в {'ВКЛ' if new_status else 'ВЫКЛ'}")
         return callback
 
     async def restart_callback(self, interaction: discord.Interaction):
         if not has_moderator_role(interaction.user):
-            await interaction.response.send_message("❌ У вас недостаточно прав для перезапуска бота.", ephemeral=True)
-            logger.warning(f"Пользователь {interaction.user} пытался перезапустить бота без прав")
+            await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
             return
         await interaction.response.send_modal(RestartConfirmModal())
 
 async def setup_dashboard(bot, radio_manager=None):
-    if not EVENT_CHANNEL_ID:
-        logger.warning("EVENT_CHANNEL_ID не задан, панель управления не создана.")
-        return
+    if not EVENT_CHANNEL_ID: return
     channel = bot.get_channel(EVENT_CHANNEL_ID)
     if not channel:
-        try:
-            channel = await bot.fetch_channel(EVENT_CHANNEL_ID)
-        except Exception as e:
-            logger.error(f"Не удалось найти канал {EVENT_CHANNEL_ID}: {e}")
-            return
+        try: channel = await bot.fetch_channel(EVENT_CHANNEL_ID)
+        except Exception: return
 
     async for msg in channel.history(limit=50):
         if msg.author == bot.user and msg.embeds:
@@ -432,23 +549,11 @@ async def setup_dashboard(bot, radio_manager=None):
                 for comp in row.children:
                     if hasattr(comp, 'custom_id') and comp.custom_id.startswith('toggle_'):
                         view = DashboardView(radio_manager)
-                        embed = discord.Embed(
-                            title="📋 Панель управления ботом",
-                            description="Управляйте функциями бота через кнопки ниже. Статус каждой функции отображается на кнопке.",
-                            color=discord.Color.blue()
-                        )
-                        embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
+                        embed = discord.Embed(title="📋 Панель управления ботом", description="Управляйте функциями бота.", color=discord.Color.blue())
                         embed.set_footer(text="G4S Командование | Code by PAVUK")
                         await msg.edit(embed=embed, view=view)
-                        logger.info("Обновлено существующее сообщение панели управления")
                         return
     view = DashboardView(radio_manager)
-    embed = discord.Embed(
-        title="📋 Панель управления ботом",
-        description="Управляйте функциями бота через кнопки ниже. Статус каждой функции отображается на кнопке.",
-        color=discord.Color.blue()
-    )
-    embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
+    embed = discord.Embed(title="📋 Панель управления ботом", description="Управляйте функциями бота.", color=discord.Color.blue())
     embed.set_footer(text="G4S Командование | Code by PAVUK")
     await channel.send(embed=embed, view=view)
-    logger.info("Создано новое сообщение панели управления")
