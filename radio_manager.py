@@ -70,16 +70,6 @@ async def _ensure_user_in_bot_voice(interaction: discord.Interaction, radio_mana
     return True
 
 
-async def _ensure_moderator(interaction: discord.Interaction) -> bool:
-    if not has_moderator_role(interaction.user):
-        await interaction.response.send_message(
-            "❌ Эта кнопка доступна только модераторам.",
-            ephemeral=True
-        )
-        return False
-    return True
-
-
 class RadioManager:
     def __init__(self):
         self.voice_clients: dict[int, discord.VoiceClient] = {}
@@ -309,18 +299,6 @@ class RadioManager:
         ok = await self.play_url(guild_id, url, name, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
         return f"📻 Воспроизводится: **{name}**" if ok else "❌ Не удалось запустить поток."
 
-    async def toggle_pause(self, guild_id: int) -> str:
-        vc = self.voice_clients.get(guild_id)
-        if not vc or not vc.is_connected():
-            return "❌ Бот не подключён к голосовому каналу."
-        if vc.is_playing():
-            vc.pause()
-            return "⏸️ Пауза."
-        if vc.is_paused():
-            vc.resume()
-            return "▶️ Продолжаю."
-        return "❌ Сейчас ничего не играет."
-
     async def set_volume(self, guild_id: int, percent: int) -> str:
         if percent < 0 or percent > 200:
             return "❌ Громкость должна быть в диапазоне 0–200%."
@@ -382,7 +360,7 @@ class RadioManager:
             ),
             color=discord.Color.purple()
         )
-        embed.set_footer(text="Смена станции — участники • Пауза — модераторы | Code by PAVUK")
+        embed.set_footer(text="Смена станции и громкость — участники канала | Code by PAVUK")
         return embed
 
     async def ensure_control_panel(self, bot, channel_id: int):
@@ -482,14 +460,3 @@ class RadioControlView(ui.View):
         if not await _ensure_user_in_bot_voice(interaction, self.radio_manager):
             return
         await interaction.response.send_modal(VolumeModal(self.radio_manager))
-
-    @ui.button(label="⏯️ Пауза / Играть", style=discord.ButtonStyle.secondary, custom_id="radio_toggle")
-    async def toggle(self, interaction: discord.Interaction, button: ui.Button):
-        if not await _ensure_moderator(interaction):
-            return
-        if not await _ensure_user_in_bot_voice(interaction, self.radio_manager):
-            return
-        await interaction.response.defer(ephemeral=True)
-        result = await self.radio_manager.toggle_pause(interaction.guild_id)
-        await interaction.followup.send(result, ephemeral=True)
-        await self.radio_manager.update_control_panel(interaction.guild_id)
