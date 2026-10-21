@@ -55,7 +55,8 @@ async def slash_help(interaction: discord.Interaction):
     embed.add_field(
         name="📻 Радио",
         value="Бот автоматически заходит в голосовой канал и играет станцию по умолчанию.\n"
-              "В текстовом канале есть панель с кнопками «Сменить станцию», «Пауза/Играть», «Остановить».",
+              "В текстовом канале есть панель с кнопками «Сменить станцию», «Пауза/Играть».\n"
+              "Включение/отключение бота из канала находится в общей панели управления.",
         inline=False
     )
     embed.add_field(
@@ -111,7 +112,7 @@ async def on_ready():
     monitor_message = await update_status(bot, None)
 
     await event_manager.cleanup_event_button(bot)
-    await event_manager.setup_dashboard(bot)
+    await event_manager.setup_dashboard(bot, radio_manager)
 
     # === Радио ===
     bot.add_view(RadioControlView(radio_manager))
