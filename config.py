@@ -29,7 +29,12 @@ if RADIO_TEXT_CHANNEL_ID:
 
 RADIO_DEFAULT_STATION = os.getenv('RADIO_DEFAULT_STATION', 'Radio Record')
 
-RADIO_DEFAULT_VOLUME = float(os.getenv('RADIO_DEFAULT_VOLUME', '0.5'))  # 0.0–2.0, где 1.0 = 100%
+RADIO_DEFAULT_VOLUME = float(os.getenv('RADIO_DEFAULT_VOLUME', '0.5'))
+
+# === Казино ===
+CASINO_CHANNEL_ID = os.getenv('CASINO_CHANNEL_ID')
+if CASINO_CHANNEL_ID:
+    CASINO_CHANNEL_ID = int(CASINO_CHANNEL_ID)
 
 # === Проверки обязательных переменных ===
 if not DISCORD_TOKEN:
