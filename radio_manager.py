@@ -76,6 +76,7 @@ class RadioManager:
         self.current_stations: dict[int, str] = {}
         self.current_urls: dict[int, str] = {}
         self.control_messages: dict[int, discord.Message] = {}
+        self.control_views: dict[int, 'RadioControlView'] = {} # Храним вьюхи для обновлений
         self.bot = None
         self.stopping: set[int] = set()
         self.retry_count: dict[int, int] = {}
@@ -152,7 +153,6 @@ class RadioManager:
             return None
 
     async def disconnect_voice(self, guild_id: int) -> str:
-        """Останавливает воспроизведение и полностью отключает бота от голосового канала."""
         vc = self.voice_clients.get(guild_id)
         self.stopping.add(guild_id) 
         if vc and vc.is_connected():
@@ -169,6 +169,7 @@ class RadioManager:
             task.cancel()
             
         logger.info(f"Бот отключён от голосового канала в гильдии {guild_id}")
+        await self.update_control_panel(guild_id) # Обновляем панель, чтобы статус сменился на "Остановлено"
         return "🔌 Бот отключён от голосового канала."
 
     async def _notify(self, text: str):
@@ -372,26 +373,35 @@ class RadioManager:
                 logger.error(f"Текстовый канал {channel_id} не найден: {e}")
                 return
         guild_id = channel.guild.id
+
+        # Удаляем старые сообщения с панелью, чтобы избавиться от старых кнопок
         async for msg in channel.history(limit=50):
             if msg.author == bot.user and msg.components:
                 for row in msg.components:
                     for comp in row.children:
                         if hasattr(comp, "custom_id") and comp.custom_id == "radio_change":
-                            self.control_messages[guild_id] = msg
-                            await self.update_control_panel(guild_id)
-                            return
+                            try:
+                                await msg.delete()
+                                logger.info(f"Удалено устаревшее сообщение панели радио (ID: {msg.id})")
+                            except Exception as e:
+                                logger.error(f"Не удалось удалить старое сообщение панели: {e}")
+                            break
+
+        # Создаем новое сообщение
         embed = self._build_embed(guild_id)
         view = RadioControlView(self)
         msg = await channel.send(embed=embed, view=view)
         self.control_messages[guild_id] = msg
-        logger.info(f"Панель радио отправлена в {channel.name}")
+        self.control_views[guild_id] = view
+        logger.info(f"Новая панель радио отправлена в {channel.name}")
 
     async def update_control_panel(self, guild_id: int):
         msg = self.control_messages.get(guild_id)
         if not msg:
             return
         try:
-            await msg.edit(embed=self._build_embed(guild_id))
+            # Обязательно передаем view, чтобы кнопки не исчезали
+            await msg.edit(embed=self._build_embed(guild_id), view=self.control_views.get(guild_id))
         except Exception as e:
             logger.error(f"Ошибка обновления панели: {e}")
 
