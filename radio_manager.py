@@ -6,6 +6,7 @@ from discord import FFmpegPCMAudio, PCMVolumeTransformer, ui
 from urllib.parse import urlparse
 from config import RADIO_VOICE_CHANNEL_ID, RADIO_TEXT_CHANNEL_ID, RADIO_DEFAULT_STATION, RADIO_DEFAULT_VOLUME
 from utils import has_moderator_role
+from toggle_manager import get_status
 
 logger = logging.getLogger(__name__)
 
@@ -89,13 +90,12 @@ class RadioManager:
         self.stopping: set[int] = set()
         self.retry_count: dict[int, int] = {}
         self.retry_tasks: dict[int, asyncio.Task] = {}
-        self.volumes: dict[int, float] = {}  # guild_id -> volume (0.0–2.0)
+        self.volumes: dict[int, float] = {}
 
     def _get_volume(self, guild_id: int) -> float:
         return self.volumes.get(guild_id, RADIO_DEFAULT_VOLUME)
 
     def _create_source(self, url: str, guild_id: int) -> PCMVolumeTransformer:
-        """Создаёт FFmpegPCMAudio и оборачивает в VolumeTransformer с текущей громкостью."""
         raw = FFmpegPCMAudio(url, **FFMPEG_OPTIONS)
         return PCMVolumeTransformer(raw, volume=self._get_volume(guild_id))
 
@@ -160,6 +160,26 @@ class RadioManager:
         except Exception as e:
             logger.error(f"Voice connect error: {e}")
             return None
+
+    async def disconnect_voice(self, guild_id: int) -> str:
+        """Останавливает воспроизведение и полностью отключает бота от голосового канала."""
+        vc = self.voice_clients.get(guild_id)
+        self.stopping.add(guild_id) 
+        if vc and vc.is_connected():
+            if vc.is_playing() or vc.is_paused():
+                vc.stop()
+            await vc.disconnect()
+        
+        self.voice_clients.pop(guild_id, None)
+        self.current_stations.pop(guild_id, None)
+        self.current_urls.pop(guild_id, None)
+        
+        task = self.retry_tasks.get(guild_id)
+        if task and not task.done():
+            task.cancel()
+            
+        logger.info(f"Бот отключён от голосового канала в гильдии {guild_id}")
+        return "🔌 Бот отключён от голосового канала."
 
     async def _notify(self, text: str):
         if not (self.bot and RADIO_TEXT_CHANNEL_ID):
@@ -301,24 +321,7 @@ class RadioManager:
             return "▶️ Продолжаю."
         return "❌ Сейчас ничего не играет."
 
-    async def stop_playback(self, guild_id: int) -> str:
-        vc = self.voice_clients.get(guild_id)
-        if not vc or not vc.is_connected():
-            return "❌ Бот не подключён к голосовому каналу."
-        if vc.is_playing() or vc.is_paused():
-            self.stopping.add(guild_id)
-            vc.stop()
-            self.current_stations.pop(guild_id, None)
-            self.current_urls.pop(guild_id, None)
-            self.retry_count[guild_id] = 0
-            task = self.retry_tasks.get(guild_id)
-            if task and not task.done():
-                task.cancel()
-            return "⏹️ Радио остановлено."
-        return "❌ Сейчас ничего не играет."
-
     async def set_volume(self, guild_id: int, percent: int) -> str:
-        """Устанавливает громкость в процентах (0–200). Применяется сразу."""
         if percent < 0 or percent > 200:
             return "❌ Громкость должна быть в диапазоне 0–200%."
         volume = percent / 100.0
@@ -331,6 +334,10 @@ class RadioManager:
 
     async def auto_start(self, bot):
         self.bot = bot
+        if not get_status("radio_enabled", True):
+            logger.warning("Радио отключено в настройках — автозапуск пропущен.")
+            return
+            
         if not RADIO_VOICE_CHANNEL_ID:
             logger.warning("RADIO_VOICE_CHANNEL_ID не задан — автозапуск радио отключён.")
             return
@@ -375,7 +382,7 @@ class RadioManager:
             ),
             color=discord.Color.purple()
         )
-        embed.set_footer(text="Смена станции — участники • Пауза/Стоп — модераторы | Code by PAVUK")
+        embed.set_footer(text="Смена станции — участники • Пауза — модераторы | Code by PAVUK")
         return embed
 
     async def ensure_control_panel(self, bot, channel_id: int):
@@ -484,16 +491,5 @@ class RadioControlView(ui.View):
             return
         await interaction.response.defer(ephemeral=True)
         result = await self.radio_manager.toggle_pause(interaction.guild_id)
-        await interaction.followup.send(result, ephemeral=True)
-        await self.radio_manager.update_control_panel(interaction.guild_id)
-
-    @ui.button(label="⏹️ Остановить", style=discord.ButtonStyle.danger, custom_id="radio_stop_btn")
-    async def stop_btn(self, interaction: discord.Interaction, button: ui.Button):
-        if not await _ensure_moderator(interaction):
-            return
-        if not await _ensure_user_in_bot_voice(interaction, self.radio_manager):
-            return
-        await interaction.response.defer(ephemeral=True)
-        result = await self.radio_manager.stop_playback(interaction.guild_id)
         await interaction.followup.send(result, ephemeral=True)
         await self.radio_manager.update_control_panel(interaction.guild_id)
