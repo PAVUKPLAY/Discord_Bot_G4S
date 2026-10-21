@@ -2,6 +2,7 @@ import discord
 from discord import ui
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import json
 import os
 import asyncio
@@ -12,7 +13,10 @@ from utils import has_moderator_role
 
 logger = logging.getLogger(__name__)
 
-# Берем путь из переменной окружения DATA_DIR или используем /app/data (постоянный том Bothost)
+# Устанавливаем часовой пояс МСК
+MSK = ZoneInfo("Europe/Moscow")
+
+# Берем путь из переменной окружения DATA_DIR или используем /app/data
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 DATA_FILE = os.path.join(DATA_DIR, "events_data.json")
 
@@ -26,6 +30,16 @@ def load_events():
                 for eid, ev in data.items():
                     ev['participants'] = set(ev['participants'])
                     ev['non_participants'] = set(ev['non_participants'])
+                    
+                    # Исправляем старые сохранения без часового пояса
+                    try:
+                        dt = datetime.fromisoformat(ev['datetime'])
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=MSK)
+                            ev['datetime'] = dt.isoformat()
+                    except Exception:
+                        pass
+                        
                 logger.info(f"Загружено {len(data)} событий из {DATA_FILE}")
                 return data
             except Exception as e:
@@ -133,10 +147,11 @@ async def reschedule_event(bot, event_id, new_date, new_time):
     event['date'] = new_date
     event['time'] = new_time
     dt_str = f"{new_date} {new_time}"
-    event_dt = datetime.strptime(dt_str, "%d.%m.%Y %H:%M")
+    
+    # Сохраняем с учетом МСК
+    event_dt = datetime.strptime(dt_str, "%d.%m.%Y %H:%M").replace(tzinfo=MSK)
     event['datetime'] = event_dt.isoformat()
     
-    # Сбрасываем флаги напоминаний, чтобы они сработали заново
     event['reminded_24h'] = False
     event['reminded_1h'] = False
     event['reminded_start'] = False
@@ -178,8 +193,10 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             if not re.match(r'^\d{2}:\d{2}$', self.time_input.value):
                 await interaction.response.send_message('❌ Неверный формат времени. Используйте ЧЧ:ММ', ephemeral=True)
                 return
+            
+            # Парсим с учетом МСК
             try:
-                event_datetime = datetime.strptime(f"{self.date_input.value} {self.time_input.value}", "%d.%m.%Y %H:%M")
+                event_datetime = datetime.strptime(f"{self.date_input.value} {self.time_input.value}", "%d.%m.%Y %H:%M").replace(tzinfo=MSK)
             except ValueError:
                 await interaction.response.send_message('❌ Некорректная дата или время.', ephemeral=True)
                 return
@@ -403,7 +420,9 @@ async def send_reminder(bot, event, title, description, color):
 async def reminder_task(bot):
     await bot.wait_until_ready()
     while not bot.is_closed():
-        now = datetime.now()
+        # Берем текущее время по МСК, чтобы не зависеть от сервера
+        now = datetime.now(MSK)
+        
         for eid, event in list(events.items()):
             if event.get('is_cancelled', False):
                 continue
@@ -414,6 +433,8 @@ async def reminder_task(bot):
                 continue
 
             delta = (event_dt - now).total_seconds()
+            # Получаем unix timestamp для красивого вывода в Discord
+            ts = int(event_dt.timestamp())
 
             # Если мероприятие прошло более 2 часов назад, пропускаем
             if delta < -2 * 3600:
@@ -424,7 +445,7 @@ async def reminder_task(bot):
                 await send_reminder(
                     bot, event,
                     title="📅 Напоминание о смежке!",
-                    description=f"**{event['title']}** состоится **завтра** в **{event['time']}** (МСК).\nНе забудьте подтвердить участие!",
+                    description=f"**{event['title']}** начнется <t:{ts}:R>.\nНе забудьте подтвердить участие!",
                     color=discord.Color.orange()
                 )
                 event['reminded_24h'] = True
@@ -435,7 +456,7 @@ async def reminder_task(bot):
                 await send_reminder(
                     bot, event,
                     title="⏳ Скоро начало!",
-                    description=f"Мероприятие **{event['title']}** начнется **через 1 час** (в **{event['time']}** МСК).\nГотовьтесь!",
+                    description=f"Мероприятие **{event['title']}** начнется <t:{ts}:R>.\nГотовьтесь!",
                     color=discord.Color.blue()
                 )
                 event['reminded_1h'] = True
@@ -452,7 +473,7 @@ async def reminder_task(bot):
                 event['reminded_start'] = True
                 save_events(events)
 
-        await asyncio.sleep(30) # Проверяем каждые 30 секунд
+        await asyncio.sleep(30)
 
 async def on_reaction_add(reaction, user):
     if user.bot: return
