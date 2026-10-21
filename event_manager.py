@@ -12,8 +12,12 @@ from utils import has_moderator_role
 
 logger = logging.getLogger(__name__)
 
-DATA_FILE = os.getenv("EVENTS_FILE", "events_data.json")
-DATA_FILE = os.path.abspath(DATA_FILE)
+# Берем путь из переменной окружения DATA_DIR или используем /app/data (постоянный том Bothost)
+DATA_DIR = os.getenv("DATA_DIR", "/app/data")
+DATA_FILE = os.path.join(DATA_DIR, "events_data.json")
+
+# Убедимся, что папка существует
+os.makedirs(DATA_DIR, exist_ok=True)
 
 def load_events():
     if os.path.exists(DATA_FILE):
@@ -39,7 +43,7 @@ def save_events(events):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.flush()
-        os.fsync(f.fileno())
+        os.fsync(f.fileno()) # Гарантируем запись на диск
 
 events = load_events()
 
