@@ -47,7 +47,7 @@ class ApplyModal(ui.Modal, title='Заявка в отряд G4S'):
         embed.add_field(name="🎮 Игровой ник", value=self.nickname.value, inline=True)
         embed.add_field(name="📅 Возраст", value=self.age.value, inline=True)
         embed.add_field(name="📝 Опыт", value=self.experience.value or "Не указан", inline=False)
-        embed.set_footer(text=f"G4S Командование • ID: {app_id}")
+        embed.set_footer(text=f"G4S Командование • ID: {app_id} | Code by PAVUK")
 
         view = ApplicationActions(app_id, interaction.user.id)
         await channel.send(embed=embed, view=view)
@@ -169,7 +169,7 @@ async def send_welcome_message(member):
         ),
         color=discord.Color.gold()
     )
-    embed.set_footer(text="G4S Командование")
+    embed.set_footer(text="G4S Командование | Code by PAVUK")
     view = ApplyButton()
     await channel.send(f"{member.mention}", embed=embed, view=view)
     logger.info(f"Приветствие отправлено для {member.display_name}")
