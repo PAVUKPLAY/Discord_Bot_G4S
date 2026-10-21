@@ -78,7 +78,7 @@ async def update_event_embed(message, event_id):
         value="\n".join(non_participants) if non_participants else "Пока никого",
         inline=True
     )
-    embed.set_footer(text=f"G4S Командование • ID: {event_id}")
+    embed.set_footer(text=f"G4S Командование • ID: {event_id} | Code by PAVUK")
     await message.edit(embed=embed)
     logger.debug(f"Обновлён embed события {event_id}")
 
@@ -127,7 +127,7 @@ class CreateEventModal(ui.Modal, title='Создание смежки'):
             )
             embed.add_field(name="✅ Участники", value="Пока никого", inline=True)
             embed.add_field(name="❌ Не смогут", value="Пока никого", inline=True)
-            embed.set_footer(text=f"G4S Командование • ID: {event_id}")
+            embed.set_footer(text=f"G4S Командование • ID: {event_id} | Code by PAVUK")
 
             channel = interaction.guild.get_channel(ANNOUNCE_CHANNEL_ID)
             if not channel:
@@ -209,6 +209,7 @@ async def setup_event_button(bot):
         description="Нажмите на кнопку ниже, чтобы создать новое событие для отряда.",
         color=discord.Color.blue()
     )
+    embed.set_footer(text="Code by PAVUK")
     view = CreateEventButton()
     await channel.send(embed=embed, view=view)
     logger.info("Постоянная кнопка 'Создать смежку' размещена.")
@@ -254,6 +255,7 @@ async def reminder_task(bot):
                         description=f"**{event['title']}** состоится **завтра** в **{event['time']}** (МСК).\nНе забудьте подтвердить участие!",
                         color=discord.Color.orange()
                     )
+                    embed.set_footer(text="Code by PAVUK")
                     content = "@everyone" if PING_EVERYONE else None
                     await channel.send(content=content, embed=embed)
                     event['reminded'] = True
@@ -385,7 +387,7 @@ class DashboardView(ui.View):
                 color=discord.Color.blue()
             )
             embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
-            embed.set_footer(text="G4S Командование")
+            embed.set_footer(text="G4S Командование | Code by PAVUK")
             await interaction.response.edit_message(embed=embed, view=self)
             logger.info(f"Пользователь {interaction.user} переключил {feature} в {'ВКЛ' if new_status else 'ВЫКЛ'}")
         return callback
@@ -421,7 +423,7 @@ async def setup_dashboard(bot):
                             color=discord.Color.blue()
                         )
                         embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
-                        embed.set_footer(text="G4S Командование")
+                        embed.set_footer(text="G4S Командование | Code by PAVUK")
                         await msg.edit(embed=embed, view=view)
                         logger.info("Обновлено существующее сообщение панели управления")
                         return
@@ -432,6 +434,6 @@ async def setup_dashboard(bot):
         color=discord.Color.blue()
     )
     embed.add_field(name="Статус", value="Зелёный – включено, Красный – выключено", inline=False)
-    embed.set_footer(text="G4S Командование")
+    embed.set_footer(text="G4S Командование | Code by PAVUK")
     await channel.send(embed=embed, view=view)
     logger.info("Создано новое сообщение панели управления")
