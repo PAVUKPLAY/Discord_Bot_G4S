@@ -180,6 +180,7 @@ async def update_status(bot, monitor_message):
             value=f"🛡️ G4S • Live Monitor • Обновлено <t:{current_unix_time}:R>",
             inline=False
         )
+        embed.set_footer(text="Code by PAVUK")
 
         if monitor_message is None:
             async for msg in channel.history(limit=15):
