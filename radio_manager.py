@@ -76,7 +76,7 @@ class RadioManager:
         self.current_stations: dict[int, str] = {}
         self.current_urls: dict[int, str] = {}
         self.control_messages: dict[int, discord.Message] = {}
-        self.control_views: dict[int, 'RadioControlView'] = {} # Храним вьюхи для обновлений
+        self.control_views: dict[int, 'RadioControlView'] = {}
         self.bot = None
         self.stopping: set[int] = set()
         self.retry_count: dict[int, int] = {}
@@ -90,11 +90,12 @@ class RadioManager:
         raw = FFmpegPCMAudio(url, **FFMPEG_OPTIONS)
         return PCMVolumeTransformer(raw, volume=self._get_volume(guild_id))
 
-    async def search_station(self, query: str):
+    async def search_stations(self, query: str) -> list:
+        """Ищет до 5 станций и возвращает список."""
         url = f"{RADIO_API_BASE}/stations/search"
         params = {
             "name": query,
-            "limit": 20,
+            "limit": 20, # Берем с запасом, чтобы отфильтровать мусор
             "hidebroken": "true",
             "order": "clickcount",
             "reverse": "true"
@@ -104,8 +105,11 @@ class RadioManager:
                 async with session.get(url, params=params, timeout=10) as resp:
                     if resp.status != 200:
                         logger.error(f"Radio Browser API вернул {resp.status}")
-                        return None
+                        return []
                     stations = await resp.json()
+                    results = []
+                    seen_names = set()
+                    
                     for st in stations:
                         if st.get("lastcheckok", 1) == 0:
                             continue
@@ -114,23 +118,22 @@ class RadioManager:
                             continue
                         if _classify_url(stream_url) is not True:
                             continue
-                        return {
-                            "name": st.get("name", "Неизвестная станция"),
-                            "url": stream_url,
-                        }
-                    return None
+                            
+                        name = st.get("name", "Неизвестная станция")
+                        # Пропускаем дубликаты по имени
+                        if name.lower() in seen_names:
+                            continue
+                            
+                        seen_names.add(name.lower())
+                        results.append({"name": name, "url": stream_url})
+                        
+                        if len(results) >= 5:
+                            break
+                            
+                    return results
         except Exception as e:
             logger.error(f"Ошибка поиска станции '{query}': {e}")
-            return None
-
-    async def resolve_station(self, query: str):
-        query = query.strip()
-        if query.startswith(("http://", "https://")):
-            return (query, query)
-        st = await self.search_station(query)
-        if st:
-            return (st["name"], st["url"])
-        return None
+            return []
 
     async def connect_voice(self, channel: discord.VoiceChannel):
         guild_id = channel.guild.id
@@ -169,7 +172,7 @@ class RadioManager:
             task.cancel()
             
         logger.info(f"Бот отключён от голосового канала в гильдии {guild_id}")
-        await self.update_control_panel(guild_id) # Обновляем панель, чтобы статус сменился на "Остановлено"
+        await self.update_control_panel(guild_id)
         return "🔌 Бот отключён от голосового канала."
 
     async def _notify(self, text: str):
@@ -271,35 +274,6 @@ class RadioManager:
             logger.error(f"FFmpeg error: {e}")
             return False
 
-    async def change_station(self, guild_id: int, query: str) -> str:
-        vc = self.voice_clients.get(guild_id)
-        if not vc or not vc.is_connected():
-            return "❌ Бот не подключён к голосовому каналу."
-        query = query.strip()
-        if query.startswith(("http://", "https://")):
-            if _classify_url(query) is False:
-                return (
-                    f"❌ URL «{query}» похож на веб-страницу, а не на аудиопоток.\n"
-                    f"Укажите прямую ссылку на поток — обычно она заканчивается на "
-                    f"`.mp3`, `.m3u8` или содержит `:8000/`."
-                )
-        resolved = await self.resolve_station(query)
-        if not resolved:
-            return (
-                f"❌ Станция «{query}» не найдена. Попробуйте другое название "
-                f"(например, `Radio Record`, `Europa Plus`, `DFM`) или укажите прямой URL потока."
-            )
-        name, url = resolved
-        if vc.is_playing() or vc.is_paused():
-            self.stopping.add(guild_id)
-            vc.stop()
-            await asyncio.sleep(0.2)
-        task = self.retry_tasks.get(guild_id)
-        if task and not task.done():
-            task.cancel()
-        ok = await self.play_url(guild_id, url, name, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
-        return f"📻 Воспроизводится: **{name}**" if ok else "❌ Не удалось запустить поток."
-
     async def set_volume(self, guild_id: int, percent: int) -> str:
         if percent < 0 or percent > 200:
             return "❌ Громкость должна быть в диапазоне 0–200%."
@@ -333,9 +307,10 @@ class RadioManager:
             return
         guild_id = channel.guild.id
         if RADIO_DEFAULT_STATION:
-            resolved = await self.resolve_station(RADIO_DEFAULT_STATION)
-            if resolved:
-                name, url = resolved
+            # Для автозапуска просто ищем и играем первую попавшуюся
+            stations = await self.search_stations(RADIO_DEFAULT_STATION)
+            if stations:
+                name, url = stations[0]["name"], stations[0]["url"]
                 await self.play_url(guild_id, url, name, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
             else:
                 logger.warning(f"Станция по умолчанию '{RADIO_DEFAULT_STATION}' не найдена.")
@@ -374,7 +349,7 @@ class RadioManager:
                 return
         guild_id = channel.guild.id
 
-        # Удаляем старые сообщения с панелью, чтобы избавиться от старых кнопок
+        # Удаляем старые панели
         async for msg in channel.history(limit=50):
             if msg.author == bot.user and msg.components:
                 for row in msg.components:
@@ -382,12 +357,10 @@ class RadioManager:
                         if hasattr(comp, "custom_id") and comp.custom_id == "radio_change":
                             try:
                                 await msg.delete()
-                                logger.info(f"Удалено устаревшее сообщение панели радио (ID: {msg.id})")
-                            except Exception as e:
-                                logger.error(f"Не удалось удалить старое сообщение панели: {e}")
+                            except Exception:
+                                pass
                             break
 
-        # Создаем новое сообщение
         embed = self._build_embed(guild_id)
         view = RadioControlView(self)
         msg = await channel.send(embed=embed, view=view)
@@ -400,7 +373,6 @@ class RadioManager:
         if not msg:
             return
         try:
-            # Обязательно передаем view, чтобы кнопки не исчезали
             await msg.edit(embed=self._build_embed(guild_id), view=self.control_views.get(guild_id))
         except Exception as e:
             logger.error(f"Ошибка обновления панели: {e}")
@@ -409,7 +381,7 @@ class RadioManager:
 class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
     station = ui.TextInput(
         label="Название станции или URL",
-        placeholder="Например: Radio Record, Europa Plus или https://stream.example.com/radio.mp3",
+        placeholder="Например: Radio Record, Europa Plus или https://...",
         required=True,
         max_length=200
     )
@@ -422,9 +394,92 @@ class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
         if not await _ensure_user_in_bot_voice(interaction, self.radio_manager):
             return
         await interaction.response.defer(ephemeral=True)
-        result = await self.radio_manager.change_station(interaction.guild_id, self.station.value)
-        await interaction.followup.send(result, ephemeral=True)
-        await self.radio_manager.update_control_panel(interaction.guild_id)
+        
+        query = self.station.value.strip()
+        
+        # Если это прямой URL
+        if query.startswith(("http://", "https://")):
+            if _classify_url(query) is False:
+                await interaction.followup.send(
+                    f"❌ URL «{query}» похож на веб-страницу, а не на аудиопоток.",
+                    ephemeral=True
+                )
+                return
+            # Играем сразу
+            ok = await self.radio_manager.play_url(interaction.guild_id, query, query, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
+            if ok:
+                await interaction.followup.send(f"📻 Воспроизводится прямой поток.", ephemeral=True)
+                await self.radio_manager.update_control_panel(interaction.guild_id)
+            else:
+                await interaction.followup.send("❌ Не удалось запустить поток.", ephemeral=True)
+            return
+
+        # Ищем по названию
+        stations = await self.radio_manager.search_stations(query)
+        
+        if not stations:
+            await interaction.followup.send(
+                f"❌ Станция «{query}» не найдена. Попробуйте другое название или прямую ссылку.",
+                ephemeral=True
+            )
+            return
+
+        if len(stations) == 1:
+            # Если найдена только одна, запускаем сразу
+            name, url = stations[0]["name"], stations[0]["url"]
+            ok = await self.radio_manager.play_url(interaction.guild_id, url, name, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
+            if ok:
+                await interaction.followup.send(f"📻 Воспроизводится: **{name}**", ephemeral=True)
+                await self.radio_manager.update_control_panel(interaction.guild_id)
+            else:
+                await interaction.followup.send("❌ Не удалось запустить поток.", ephemeral=True)
+        else:
+            # Если несколько, показываем список
+            view = StationSelectView(self.radio_manager, stations)
+            await interaction.followup.send(
+                f"Найдено несколько станций по запросу «{query}». Выберите нужную:",
+                view=view,
+                ephemeral=True
+            )
+
+
+class StationSelect(ui.Select):
+    def __init__(self, radio_manager: RadioManager, stations: list):
+        self.radio_manager = radio_manager
+        self.stations = stations
+        
+        options = []
+        for i, st in enumerate(stations):
+            # Обрезаем длинные названия для выпадающего списка
+            label = st["name"] if len(st["name"]) <= 100 else st["name"][:97] + "..."
+            options.append(discord.SelectOption(label=label, value=str(i)))
+            
+        super().__init__(placeholder="Выберите радиостанцию...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await _ensure_user_in_bot_voice(interaction, self.radio_manager):
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        idx = int(self.values[0])
+        station = self.stations[idx]
+        
+        ok = await self.radio_manager.play_url(interaction.guild_id, station["url"], station["name"], notify_channel_id=RADIO_TEXT_CHANNEL_ID)
+        
+        if ok:
+            await interaction.followup.send(f"📻 Воспроизводится: **{station['name']}**", ephemeral=True)
+            await self.radio_manager.update_control_panel(interaction.guild_id)
+            # Отключаем селект, чтобы нельзя было нажать дважды
+            self.disabled = True
+            await interaction.message.edit(view=None)
+        else:
+            await interaction.followup.send("❌ Не удалось запустить поток.", ephemeral=True)
+
+
+class StationSelectView(ui.View):
+    def __init__(self, radio_manager: RadioManager, stations: list):
+        super().__init__(timeout=60)
+        self.add_item(StationSelect(radio_manager, stations))
 
 
 class VolumeModal(ui.Modal, title="Громкость радио"):
