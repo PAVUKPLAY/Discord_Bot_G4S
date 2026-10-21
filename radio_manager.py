@@ -421,7 +421,6 @@ class RadioChangeVoteView(ui.View):
             pass
 
     async def check_result(self, interaction: discord.Interaction) -> bool:
-        """Проверяет, достигнут ли порог или голосование провалено. Возвращает True, если голосование завершено."""
         # Если набралось нужное количество ЗА
         if len(self.votes_yes) >= self.required_votes:
             self.stop()
@@ -448,11 +447,13 @@ class RadioChangeVoteView(ui.View):
         remaining = self.total_members - len(self.votes_yes) - len(self.votes_no)
         if len(self.votes_yes) + remaining < self.required_votes:
             self.stop()
-            for child in self.children:
-                child.disabled = True
-            await self.update_vote_embed()
             
-            await interaction.channel.send(f"❌ Голосование провалено! Большинство против смены станции.")
+            # УДАЛЯЕМ СООБЩЕНИЕ ПРИ ПРОВАЛЕ
+            if self.message:
+                try:
+                    await self.message.delete()
+                except Exception:
+                    pass
             
             try:
                 await self.original_interaction.followup.send(
@@ -504,16 +505,20 @@ class RadioChangeVoteView(ui.View):
         await self.check_result(interaction)
 
     async def on_timeout(self):
+        # УДАЛЯЕМ СООБЩЕНИЕ ПРИ ИСТЕЧЕНИИ ВРЕМЕНИ
         if self.message:
-            for child in self.children:
-                child.disabled = True
             try:
-                embed = self.message.embeds[0]
-                embed.color = discord.Color.red()
-                embed.set_footer(text="Время голосования истекло.")
-                await self.message.edit(content="⏳ Время голосования истекло. Смена станции отменена.", embed=embed, view=self)
-            except:
+                await self.message.delete()
+            except Exception:
                 pass
+        
+        try:
+            await self.original_interaction.followup.send(
+                "⏳ Время голосования истекло. Смена станции отменена.",
+                ephemeral=True
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить followup по таймауту: {e}")
 
 
 class ChangeStationModal(ui.Modal, title="Смена радиостанции"):
