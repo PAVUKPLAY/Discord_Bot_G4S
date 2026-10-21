@@ -9,6 +9,7 @@ from toggle_manager import get_status
 from utils import has_moderator_role
 import welcome_manager
 from radio_manager import RadioManager, RadioControlView
+import casino  # Импортируем модуль для вызова функции создания панели
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,6 +61,11 @@ async def slash_help(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
+        name="🎰 Казино",
+        value="В специальном канале есть панель с кнопками для игры в слоты, монетку и рулетку.",
+        inline=False
+    )
+    embed.add_field(
         name="📋 Заявки в отряд",
         value=(
             "При вступлении на сервер ты получишь роль **Гость** и приветственное сообщение.\n"
@@ -97,6 +103,14 @@ async def on_member_join(member):
 async def on_ready():
     global monitor_message
     logger.info(f'Бот {bot.user.name} успешно запущен и готов к работе!')
+    
+    # === ЗАГРУЖАЕМ КАЗИНО ===
+    try:
+        await bot.load_extension("casino")
+        logger.info("Модуль казино загружен.")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки модуля казино: {e}")
+
     try:
         await bot.tree.sync()
         logger.info("Слеш-команды синхронизированы")
@@ -117,6 +131,9 @@ async def on_ready():
     # === Радио ===
     bot.add_view(RadioControlView(radio_manager))
     bot.loop.create_task(radio_manager.auto_start(bot))
+
+    # === Казино (Создание панели) ===
+    await casino.setup_casino_panel(bot)
 
     if not update_status_task.is_running():
         update_status_task.start()
