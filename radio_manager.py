@@ -425,12 +425,15 @@ class RadioChangeVoteView(ui.View):
         # Если набралось нужное количество ЗА
         if len(self.votes_yes) >= self.required_votes:
             self.stop()
-            for child in self.children:
-                child.disabled = True
-            await self.update_vote_embed()
             
-            await interaction.channel.send(f"✅ Голосование пройдено! {self.original_interaction.user.mention} может сменить станцию.")
+            # Удаляем сообщение с голосованием
+            if self.message:
+                try:
+                    await self.message.delete()
+                except Exception:
+                    pass
             
+            # Отправляем скрытое сообщение только запросившему
             try:
                 await self.original_interaction.followup.send(
                     "✅ Большинство проголосовало **ЗА**. Вы можете выбрать станцию.",
