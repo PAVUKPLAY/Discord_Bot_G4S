@@ -50,10 +50,22 @@ async def setup_hook():
 bot.setup_hook = setup_hook
 
 # ==================== ГЛОБАЛЬНЫЕ СЛУШАТЕЛИ (ЛОГИРОВАНИЕ) ====================
-bot.add_listener(lambda guild, user: logging_manager.on_member_ban(guild, user, bot), 'on_member_ban')
-bot.add_listener(lambda member: logging_manager.on_member_remove(member, bot), 'on_member_remove')
-bot.add_listener(lambda before, after: logging_manager.on_member_update(before, after, bot), 'on_member_update')
-bot.add_listener(lambda member, before, after: logging_manager.on_voice_state_update(member, before, after, bot), 'on_voice_state_update')
+# Переписываем лямбды на асинхронные обертки
+@bot.event
+async def on_member_ban(guild, user):
+    await logging_manager.on_member_ban(guild, user, bot)
+
+@bot.event
+async def on_member_remove(member):
+    await logging_manager.on_member_remove(member, bot)
+
+@bot.event
+async def on_member_update(before, after):
+    await logging_manager.on_member_update(before, after, bot)
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    await logging_manager.on_voice_state_update(member, before, after, bot)
 
 # ==================== СЛЕШ-КОМАНДЫ ====================
 
