@@ -4,11 +4,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Берем путь из переменной окружения DATA_DIR или используем /app/data (постоянный том Bothost)
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
-# Убедимся, что папка существует
 os.makedirs(DATA_DIR, exist_ok=True)
 
 def load_settings():
@@ -30,7 +28,7 @@ def save_settings(settings):
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=2)
             f.flush()
-            os.fsync(f.fileno()) # Гарантируем запись на диск
+            os.fsync(f.fileno())
         logger.info(f"Настройки сохранены: {settings}")
     except Exception as e:
         logger.error(f"Ошибка сохранения настроек: {e}")
