@@ -45,7 +45,8 @@ SYSTEM_PROMPT = {
 }
 
 def split_text(text: str, limit: int = 1990) -> list:
-    if len(text) <= limit: return [text]
+    if len(text) <= limit: 
+        return [text]
     chunks = []
     current_chunk = ""
     sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -69,11 +70,16 @@ def split_text(text: str, limit: int = 1990) -> list:
                 else: current_chunk = ""
             else:
                 current_chunk = sentence
-    if current_chunk: chunks.append(current_chunk)
+    if current_chunk: 
+        chunks.append(current_chunk)
     return chunks
 
 async def send_long_answer(destination, text):
-    chunks = split_text(text)
+    # Защита от пустых чанков
+    chunks = [c for c in split_text(text) if c.strip()]
+    if not chunks: 
+        return []
+        
     total = len(chunks)
     sent_messages = []
     for i, chunk in enumerate(chunks):
@@ -115,7 +121,16 @@ async def ask_deepseek(history: list, image_url: str = None, user_name: str = ""
                     if resp.status == 402: return "💳 **Недостаточно средств на аккаунте DeepSeek.**"
                     return f"❌ Ошибка API DeepSeek {resp.status}: {error_msg}"
                 data = await resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+                
+                # Безопасное извлечение контента
+                try:
+                    content = data["choices"][0]["message"]["content"]
+                    if not content or not content.strip():
+                        return "⚠️ Нейросеть вернула пустой ответ (возможно, сработал фильтр). Попробуйте переформулировать вопрос."
+                    return content.strip()
+                except (KeyError, IndexError):
+                    return "⚠️ Нейросеть вернула некорректный ответ."
+                    
         except asyncio.TimeoutError:
             return "⏰ DeepSeek не ответил вовремя."
         except Exception as e:
@@ -172,6 +187,11 @@ async def on_ai_message(message, bot):
             async with message.channel.typing():
                 user_name = message.author.display_name
                 answer = await ask_deepseek(history, image_url=image_url, user_name=user_name, question=question)
+                
+                # Проверка на пустой ответ перед отправкой
+                if not answer or not answer.strip():
+                    await message.reply("⚠️ Нейросеть не смогла ответить (пустой ответ).")
+                    return
                 
                 history.append({"role": "user", "content": f"[{user_name}]: {question}"})
                 history.append({"role": "assistant", "content": answer})
