@@ -23,6 +23,8 @@ STREAM_KEYWORDS = ("stream", "live", "radio", "listen", "air", "broadcast", "pla
 MAX_RETRIES = 5
 RETRY_DELAY = 10
 
+FALLBACK_STATION = "Radio Record" # Резервная станция на случай, если дефолтная мертва
+
 def _classify_url(url: str):
     try: parsed = urlparse(url)
     except Exception: return False
@@ -152,6 +154,14 @@ class RadioManager:
                 await self._reconnect_voice(guild_id)
                 vc = self.voice_clients.get(guild_id)
                 if not vc or not vc.is_connected(): continue
+            
+            # Если ссылка отвалилась (404), пробуем найти новый рабочий URL по имени станции
+            if attempt >= 2:
+                logger.info(f"Попытка {attempt}: ищу новый URL для станции '{name}'")
+                stations = await self.search_stations(name)
+                if stations:
+                    url = stations[0]["url"]
+
             try:
                 source = self._create_source(url, guild_id)
                 vc.play(source, after=lambda e: self._after_play(e, guild_id, name, url))
@@ -160,7 +170,8 @@ class RadioManager:
                 await self.update_control_panel(guild_id)
                 await self._notify(f"🔄 Радио «{name}» перезапущено.")
                 return
-            except: pass
+            except Exception: 
+                pass
         await self._notify(f"⚠️ Не удалось восстановить поток «{name}».")
         self.retry_count[guild_id] = 0
 
@@ -206,12 +217,28 @@ class RadioManager:
         if not channel:
             try: channel = await bot.fetch_channel(RADIO_VOICE_CHANNEL_ID)
             except: return
+        
         vc = await self.connect_voice(channel)
         if not vc: return
         guild_id = channel.guild.id
+
+        # Пытаемся запустить дефолтную станцию
+        started = False
         if RADIO_DEFAULT_STATION:
             stations = await self.search_stations(RADIO_DEFAULT_STATION)
-            if stations: await self.play_url(guild_id, stations[0]["url"], stations[0]["name"], notify_channel_id=RADIO_TEXT_CHANNEL_ID)
+            if stations:
+                started = await self.play_url(guild_id, stations[0]["url"], stations[0]["name"], notify_channel_id=RADIO_TEXT_CHANNEL_ID)
+        
+        # Если не удалось запустить (мертвая ссылка), включаем резервную
+        if not started:
+            logger.warning(f"Станция по умолчанию не запустилась. Включаю резервную: {FALLBACK_STATION}")
+            fallback_stations = await self.search_stations(FALLBACK_STATION)
+            if fallback_stations:
+                await self.play_url(guild_id, fallback_stations[0]["url"], fallback_stations[0]["name"], notify_channel_id=RADIO_TEXT_CHANNEL_ID)
+                await self._notify(f"⚠️ Станция по умолчанию была недоступна. Включена резервная: **{FALLBACK_STATION}**")
+            else:
+                await self._notify(f"❌ Все радиостанции недоступны.")
+
         if RADIO_TEXT_CHANNEL_ID: await self.ensure_control_panel(bot, RADIO_TEXT_CHANNEL_ID)
 
     def _build_embed(self, guild_id: int) -> discord.Embed:
