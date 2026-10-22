@@ -18,6 +18,11 @@ FIGHTER_ROLE_ID = os.getenv('FIGHTER_ROLE_ID')
 
 MODERATOR_ROLE_IDS = [int(x) for x in os.getenv('MODERATOR_ROLE_IDS', '').split(',') if x.strip().isdigit()]
 
+# === Логирование ===
+LOG_CHANNEL_ID = os.getenv('LOG_CHANNEL_ID')
+if LOG_CHANNEL_ID:
+    LOG_CHANNEL_ID = int(LOG_CHANNEL_ID)
+
 # === Радио ===
 RADIO_VOICE_CHANNEL_ID = os.getenv('RADIO_VOICE_CHANNEL_ID')
 if RADIO_VOICE_CHANNEL_ID:
@@ -28,13 +33,17 @@ if RADIO_TEXT_CHANNEL_ID:
     RADIO_TEXT_CHANNEL_ID = int(RADIO_TEXT_CHANNEL_ID)
 
 RADIO_DEFAULT_STATION = os.getenv('RADIO_DEFAULT_STATION', 'Radio Record')
-
 RADIO_DEFAULT_VOLUME = float(os.getenv('RADIO_DEFAULT_VOLUME', '0.5'))
 
 # === Казино ===
 CASINO_CHANNEL_ID = os.getenv('CASINO_CHANNEL_ID')
 if CASINO_CHANNEL_ID:
     CASINO_CHANNEL_ID = int(CASINO_CHANNEL_ID)
+
+# === Активность ===
+ACTIVITY_CHANNEL_ID = os.getenv('ACTIVITY_CHANNEL_ID')
+if ACTIVITY_CHANNEL_ID:
+    ACTIVITY_CHANNEL_ID = int(ACTIVITY_CHANNEL_ID)
 
 # === Проверки обязательных переменных ===
 if not DISCORD_TOKEN:
