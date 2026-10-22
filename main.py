@@ -9,7 +9,9 @@ from toggle_manager import get_status
 from utils import has_moderator_role
 import welcome_manager
 from radio_manager import RadioManager, RadioControlView
-import casino  # Импортируем модуль для вызова функции создания панели
+import casino
+import logging_manager
+import activity_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,12 +25,35 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 intents.voice_states = True
+intents.moderation = True 
 
 bot = commands.Bot(command_prefix='/', intents=intents)
 bot.remove_command('help')
 
 monitor_message = None
 radio_manager = RadioManager()
+
+# ==================== ЗАГРУЗКА РАСШИРЕНИЙ (ДО ЗАПУСКА) ====================
+async def setup_hook():
+    try:
+        await bot.load_extension("casino")
+        logger.info("Модуль казино загружен.")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки модуля казино: {e}")
+        
+    try:
+        await bot.load_extension("activity_manager")
+        logger.info("Модуль активности загружен.")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки модуля активности: {e}")
+
+bot.setup_hook = setup_hook
+
+# ==================== ГЛОБАЛЬНЫЕ СЛУШАТЕЛИ (ЛОГИРОВАНИЕ) ====================
+bot.add_listener(lambda guild, user: logging_manager.on_member_ban(guild, user, bot), 'on_member_ban')
+bot.add_listener(lambda member: logging_manager.on_member_remove(member, bot), 'on_member_remove')
+bot.add_listener(lambda before, after: logging_manager.on_member_update(before, after, bot), 'on_member_update')
+bot.add_listener(lambda member, before, after: logging_manager.on_voice_state_update(member, before, after, bot), 'on_voice_state_update')
 
 # ==================== СЛЕШ-КОМАНДЫ ====================
 
@@ -39,59 +64,23 @@ async def slash_help(interaction: discord.Interaction):
         description="Вот что я умею:",
         color=discord.Color.blue()
     )
-    embed.add_field(
-        name="🤖 AI-чат",
-        value=(
-            "Напишите **`Ученый <вопрос>`** или **`Учёный <вопрос>`**, или просто упомяните меня, чтобы задать вопрос.\n"
-            "Для очистки истории диалога используйте **`/очистить`**.\n"
-            "Управление включением/выключением AI – через панель управления в канале событий."
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="🛡️ Мониторинг сервера Arma 3",
-        value="Каждую минуту я обновляю информацию о сервере в специальном канале.\nУправление через панель управления.",
-        inline=False
-    )
-    embed.add_field(
-        name="📻 Радио",
-        value="Бот автоматически заходит в голосовой канал и играет станцию по умолчанию.\n"
-              "В текстовом канале есть панель с кнопками «Сменить станцию», «Пауза/Играть».\n"
-              "Включение/отключение бота из канала находится в общей панели управления.",
-        inline=False
-    )
-    embed.add_field(
-        name="🎰 Казино",
-        value="В специальном канале есть панель с кнопками для игры в слоты, монетку и рулетку.",
-        inline=False
-    )
-    embed.add_field(
-        name="📋 Заявки в отряд",
-        value=(
-            "При вступлении на сервер ты получишь роль **Гость** и приветственное сообщение.\n"
-            "Нажми **«Подать заявку»**, заполни форму – модерация рассмотрит её.\n"
-            "После принятия ты получишь роль **Боец**!"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="📅 События (смежки)",
-        value="Модераторы могут создавать смежки через кнопку в канале событий. Участники подтверждают участие реакциями ✅ / ❌.",
-        inline=False
-    )
+    embed.add_field(name="🤖 AI-чат", value="Напишите **`Ученый <вопрос>`** или упомяните меня. Очистка: **`/очистить`**.", inline=False)
+    embed.add_field(name="🛡️ Мониторинг сервера Arma 3", value="Каждую минуту я обновляю информацию о сервере в канале мониторинга.", inline=False)
+    embed.add_field(name="📻 Радио", value="В канале радио есть панель. Смена станции требует голосования.", inline=False)
+    embed.add_field(name="🎰 Казино", value="Специальный канал с кнопками для игр.", inline=False)
+    embed.add_field(name="📈 Активность", value="Канал со статистикой онлайна и сообщений.", inline=False)
+    embed.add_field(name="📋 Заявки в отряд", value="При вступлении на сервер вы получите роль Гость и приветствие.", inline=False)
+    embed.add_field(name="📅 События", value="Модераторы могут создавать смежки через кнопку в канале событий.", inline=False)
     embed.set_footer(text="G4S Командование • v1.0 | Code by PAVUK")
     await interaction.response.send_message(embed=embed, ephemeral=True)
-    logger.info(f"Пользователь {interaction.user} запросил справку")
 
 @bot.tree.command(name="очистить", description="Очистить вашу историю диалога с AI")
 async def slash_clear_history(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    success = await clear_history(user_id)
+    success = await clear_history(interaction.user.id)
     if success:
         await interaction.response.send_message("🧹 Ваша история диалога с AI очищена.", ephemeral=True)
-        logger.info(f"Пользователь {interaction.user} очистил свою AI-историю")
     else:
-        await interaction.response.send_message("📭 У вас не было сохранённой истории диалога.", ephemeral=True)
+        await interaction.response.send_message("📭 У вас не было сохранённой истории.", ephemeral=True)
 
 # ==================== СОБЫТИЯ И ЗАДАЧИ ====================
 
@@ -104,13 +93,6 @@ async def on_ready():
     global monitor_message
     logger.info(f'Бот {bot.user.name} успешно запущен и готов к работе!')
     
-    # === ЗАГРУЖАЕМ КАЗИНО ===
-    try:
-        await bot.load_extension("casino")
-        logger.info("Модуль казино загружен.")
-    except Exception as e:
-        logger.error(f"Ошибка загрузки модуля казино: {e}")
-
     try:
         await bot.tree.sync()
         logger.info("Слеш-команды синхронизированы")
@@ -121,19 +103,16 @@ async def on_ready():
     bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
 
     await event_manager.sync_events(bot)
-
     await cleanup_monitor(bot)
     monitor_message = await update_status(bot, None)
-
     await event_manager.cleanup_event_button(bot)
     await event_manager.setup_dashboard(bot, radio_manager)
 
-    # === Радио ===
     bot.add_view(RadioControlView(radio_manager))
     bot.loop.create_task(radio_manager.auto_start(bot))
 
-    # === Казино (Создание панели) ===
     await casino.setup_casino_panel(bot)
+    await activity_manager.setup_activity_panel(bot)
 
     if not update_status_task.is_running():
         update_status_task.start()
