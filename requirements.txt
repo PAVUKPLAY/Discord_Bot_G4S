@@ -5,3 +5,4 @@ PyNaCl
 davey
 ffmpeg-python
 pydub
+faster-whisper
