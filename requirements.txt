@@ -6,3 +6,4 @@ davey
 ffmpeg-python
 pydub
 faster-whisper
+edge-tts
