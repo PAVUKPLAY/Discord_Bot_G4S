@@ -134,22 +134,39 @@ async def send_long_answer(destination, text):
         if i < total - 1: await asyncio.sleep(0.5)
     return sent_messages
 
-# ==================== НОВАЯ ФУНКЦИЯ ДЛЯ TTS ====================
+# ==================== ОЧИСТКА ТЕКСТА ДЛЯ TTS ====================
+def clean_text_for_tts(text: str) -> str:
+    """Убирает эмодзи, маркдаун и ссылки, чтобы edge-tts не падал с ошибкой."""
+    # Удаляем Markdown-разметку
+    text = re.sub(r'[*_`~#]', '', text)
+    # Удаляем ссылки
+    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
+    text = re.sub(r'http\S+', '', text)
+    # Удаляем эмодзи и спецсимволы (оставляем буквы, цифры, пробелы и базовую пунктуацию)
+    text = re.sub(r'[^\w\s.,?!:;()\[\]{}\-]', '', text)
+    return text.strip()
+
 async def send_voice_answer(destination, text):
     """Генерирует TTS, конвертирует в OGG и отправляет голосовым сообщением."""
-    # Обрезаем текст, если он слишком длинный (TTS долго генерируется)
-    if len(text) > 400:
-        text = text[:400] + "... Короче, я устал говорить."
+    clean_text = clean_text_for_tts(text)
+    
+    # Если после очистки ничего не осталось (только смайлики), отправляем текст
+    if not clean_text:
+        await send_long_answer(destination, text)
+        return
+
+    if len(clean_text) > 400:
+        clean_text = clean_text[:400] + "... Короче, я устал говорить."
 
     temp_mp3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
     temp_ogg = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg").name
 
     try:
         # 1. Синтез речи (русский мужской голос)
-        communicate = edge_tts.Communicate(text, voice="ru-RU-DmitryNeural")
+        communicate = edge_tts.Communicate(clean_text, voice="ru-RU-DmitryNeural")
         await communicate.save(temp_mp3)
 
-        # 2. Конвертация в OGG/Opus (формат для Discord)
+        # 2. Конвертация в OGG/Opus
         subprocess.run(
             ["ffmpeg", "-y", "-i", temp_mp3, "-c:a", "libopus", "-b:a", "48k", temp_ogg],
             check=True, capture_output=True
@@ -165,7 +182,9 @@ async def send_voice_answer(destination, text):
                 
     except Exception as e:
         logger.error(f"Ошибка генерации голосового ответа: {e}")
-        await destination.channel.send("⚠️ Не удалось сгенерировать голосовой ответ.")
+        # Если TTS упал, отправляем текстом, чтобы не терять ответ
+        await destination.channel.send("*(Голосовой ответ не удался)*")
+        await send_long_answer(destination, text)
     finally:
         if os.path.exists(temp_mp3): os.remove(temp_mp3)
         if os.path.exists(temp_ogg): os.remove(temp_ogg)
@@ -280,7 +299,7 @@ async def on_ai_message(message, bot):
 
     if ucheniy_match or is_mentioned:
         question = ""
-        is_voice_input = bool(audio_attachments) # <--- Флаг: было ли входящее сообщение голосовым
+        is_voice_input = bool(audio_attachments)
 
         if ucheniy_match: question = content[ucheniy_match.end():].strip()
         elif is_mentioned:
@@ -348,12 +367,9 @@ async def on_ai_message(message, bot):
                 conversations[conv_id] = history
                 save_ai_memory(conversations)
                 
-                # ==================== ОТПРАВКА ОТВЕТА ====================
                 if is_voice_input:
-                    # Если вопрос был голосовым, отвечаем голосом
                     await send_voice_answer(message, answer)
                 else:
-                    # Если текст - отвечаем текстом
                     sent_messages = await send_long_answer(message, answer)
                     for msg in sent_messages: msg_to_conv[msg.id] = conv_id
                 
