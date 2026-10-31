@@ -3,12 +3,51 @@ import asyncio
 import aiohttp
 import base64
 import logging
+import json
+import os
+import tempfile
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL
 from toggle_manager import get_status
+from faster_whisper import WhisperModel
+from pydub import AudioSegment
 
 logger = logging.getLogger(__name__)
 
-conversations = {}
+DATA_DIR = os.getenv("DATA_DIR", "/app/data")
+AI_MEMORY_FILE = os.path.join(DATA_DIR, "ai_memory.json")
+
+# Инициализация модели Whisper (ленивая загрузка при первом использовании)
+whisper_model = None
+
+def get_whisper_model():
+    global whisper_model
+    if whisper_model is None:
+        logger.info("Загрузка модели faster-whisper (tiny, int8)...")
+        # tiny быстрее, но менее точен. base - компромисс для CPU.
+        whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+    return whisper_model
+
+def load_ai_memory():
+    if os.path.exists(AI_MEMORY_FILE):
+        try:
+            with open(AI_MEMORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Ошибка загрузки памяти ИИ: {e}")
+    return {}
+
+def save_ai_memory(memory):
+    try:
+        if len(memory) > 100:
+            memory = dict(list(memory.items())[-100:])
+        with open(AI_MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(memory, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения памяти ИИ: {e}")
+
+conversations = load_ai_memory()
 msg_to_conv = {}
 MAX_HISTORY_LENGTH = 15
 
@@ -24,29 +63,26 @@ SYSTEM_PROMPT = {
         "- Обращение на 'ты'. Без 'братка' и уменьшительно-ласкательных.\n"
         "- Структура: списки, развилки, чёткие выводы. В конце — встречный вопрос или жёсткий итог одной строкой.\n\n"
         "ЧЕЛОВЕЧНОСТЬ (главное):\n"
-        "- Никаких научных и околонаучных терминов. Никаких 'кризис идентичности', 'отчуждение труда', 'постмодерн', 'дискурс'. Если мысль можно сказать простыми словами — говори простыми.\n"
-        "- Объясняй как живому мужику за столом, а не как студенту на лекции. Примеры из жизни, а не из учебника.\n"
+        "- Никаких научных и околонаучных терминов. Если мысль можно сказать простыми словами — говори простыми.\n"
+        "- Объясняй как живому мужику за столом, а не как студенту на лекции. Примеры из жизни.\n"
         "- Не бойся разговорных оборотов: 'нахуя я тогда нужен', 'тебя надувают', 'пустоту шмотками не закроешь'.\n"
-        "- Если тема сложная — разбивай на простые куски. Один тезис — одна мысль — один пример.\n"
-        "- Не строй длинных конструкций. Чем короче фраза, тем лучше доходит.\n\n"
+        "- Если тема сложная — разбивай на простые куски. Один тезис — одна мысль — один пример.\n\n"
         "ПОЗИЦИЯ:\n"
         "- Говоришь как есть, даже если неприятно. Не смягчаешь, не льстишь.\n"
         "- Требуешь фактов и конкретики. Спорный тезис — разбираешь, а не соглашаешься автоматически.\n"
-        "- Прямо говоришь 'нет', если просят тупое, опасное или противоречивое. Мат — стиль, а не разрешение на хуйню.\n"
-        "- Прямота — инструмент, а не поза. Не играешь в 'крутого' ради эффекта.\n\n"
+        "- Прямо говоришь 'нет', если просят тупое, опасное или противоречивое.\n\n"
         "ЗАПРЕТЫ:\n"
         "- Никаких 'к сожалению', 'я понимаю ваши чувства', 'как ИИ я не могу'.\n"
-        "- Никакой вежливой воды и уклончивых формулировок.\n"
         "- Никаких умных слов ради умности. Если слово можно заменить простым — заменяй.\n"
         "- Не соглашаешься автоматически — споришь, если собеседник несёт чушь.\n\n"
         "ВАЖНОЕ ПРАВИЛО ДЛЯ ДИАЛОГА:\n"
-        "В беседе могут участвовать несколько человек. Формат входящих сообщений: '[Имя_игрока]: текст'. Учитывай это при ответе."
+        "В беседе могут участвовать несколько человек. Формат входящих сообщений: '[Имя_игрока]: текст'. Учитывай это при ответе.\n"
+        "Если в системном промпте передана информация о балансе или статусе игрока, используй её, чтобы подколоть или поддержать тему."
     )
 }
 
 def split_text(text: str, limit: int = 1990) -> list:
-    if len(text) <= limit: 
-        return [text]
+    if len(text) <= limit: return [text]
     chunks = []
     current_chunk = ""
     sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -70,15 +106,12 @@ def split_text(text: str, limit: int = 1990) -> list:
                 else: current_chunk = ""
             else:
                 current_chunk = sentence
-    if current_chunk: 
-        chunks.append(current_chunk)
+    if current_chunk: chunks.append(current_chunk)
     return chunks
 
 async def send_long_answer(destination, text):
-    # Защита от пустых чанков
     chunks = [c for c in split_text(text) if c.strip()]
-    if not chunks: 
-        return []
+    if not chunks: return []
         
     total = len(chunks)
     sent_messages = []
@@ -93,10 +126,89 @@ async def send_long_answer(destination, text):
         if i < total - 1: await asyncio.sleep(0.5)
     return sent_messages
 
-async def ask_deepseek(history: list, image_url: str = None, user_name: str = "", question: str = "") -> str:
+async def transcribe_audio(attachment) -> str:
+    """Скачивает аудио, конвертирует в WAV и распознаёт речь."""
+    temp_path = None
+    wav_path = None
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(attachment.url) as resp:
+                if resp.status != 200:
+                    return "⚠️ Не удалось скачать голосовое сообщение."
+                audio_data = await resp.read()
+        
+        # Создаём временные файлы
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as f:
+            f.write(audio_data)
+            temp_path = f.name
+            
+        wav_path = temp_path.replace(".ogg", ".wav")
+        
+        # Конвертация в WAV (16kHz, mono) для Whisper
+        audio = AudioSegment.from_file(temp_path)
+        audio = audio.set_frame_rate(16000).set_channels(1)
+        audio.export(wav_path, format="wav")
+        
+        model = get_whisper_model()
+        segments, info = model.transcribe(wav_path, beam_size=5)
+        
+        text = " ".join(segment.text for segment in segments).strip()
+        if not text:
+            return "⚠️ Не удалось распознать речь в голосовом сообщении."
+        return text
+    except Exception as e:
+        logger.error(f"Ошибка распознавания аудио: {e}")
+        return "⚠️ Ошибка при распознавании голосового сообщения."
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+        if wav_path and os.path.exists(wav_path):
+            os.remove(wav_path)
+
+async def web_search(query: str) -> str:
+    """Выполняет поиск в интернете через DeepSeek Search API."""
+    if not DEEPSEEK_API_KEY:
+        return ""
+    url = "https://api.deepseek.com/v1/tools/search"
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "query": query,
+        "count": 3,
+        "need_content": False
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload, timeout=30) as resp:
+                if resp.status != 200:
+                    logger.error(f"Search API вернул {resp.status}")
+                    return ""
+                data = await resp.json()
+                results = data.get("results", [])
+                if not results:
+                    return ""
+                # Формируем краткую сводку из результатов
+                snippets = []
+                for r in results:
+                    title = r.get("title", "")
+                    summary = r.get("summary", "") or r.get("snippet", "")
+                    if summary:
+                        snippets.append(f"**{title}**: {summary}")
+                return "\n\n".join(snippets)
+    except Exception as e:
+        logger.error(f"Ошибка поиска в интернете: {e}")
+        return ""
+
+async def ask_deepseek(history: list, image_url: str = None, user_name: str = "", question: str = "", context_str: str = "") -> str:
     if not DEEPSEEK_API_KEY: return "⚠️ API-ключ DeepSeek не настроен."
 
-    content_str = f"[{user_name}]: {question}"
+    if context_str:
+        content_str = f"[Система]: {context_str}\n[{user_name}]: {question}"
+    else:
+        content_str = f"[{user_name}]: {question}"
+
     if image_url:
         user_content = [
             {"type": "text", "text": content_str},
@@ -122,11 +234,10 @@ async def ask_deepseek(history: list, image_url: str = None, user_name: str = ""
                     return f"❌ Ошибка API DeepSeek {resp.status}: {error_msg}"
                 data = await resp.json()
                 
-                # Безопасное извлечение контента
                 try:
                     content = data["choices"][0]["message"]["content"]
                     if not content or not content.strip():
-                        return "⚠️ Нейросеть вернула пустой ответ (возможно, сработал фильтр). Попробуйте переформулировать вопрос."
+                        return "⚠️ Нейросеть вернула пустой ответ."
                     return content.strip()
                 except (KeyError, IndexError):
                     return "⚠️ Нейросеть вернула некорректный ответ."
@@ -145,8 +256,12 @@ async def on_ai_message(message, bot):
     is_mentioned = bot.user.mentioned_in(message)
     ucheniy_match = re.match(r'^уч[её]ный\s+', content, re.IGNORECASE)
 
+    # Проверяем вложения: изображения и аудио
     image_attachments = [att for att in message.attachments if att.content_type and att.content_type.startswith("image/")]
-    if image_attachments and not (ucheniy_match or is_mentioned): return
+    audio_attachments = [att for att in message.attachments if att.content_type and att.content_type.startswith("audio/") or (att.filename and att.filename.endswith(('.ogg', '.mp3', '.wav', '.m4a')))]
+
+    # Если есть вложения, но нет триггера - игнорируем
+    if (image_attachments or audio_attachments) and not (ucheniy_match or is_mentioned): return
 
     if ucheniy_match or is_mentioned:
         question = ""
@@ -154,7 +269,17 @@ async def on_ai_message(message, bot):
         elif is_mentioned:
             mention_pattern = re.compile(r'<@!?%s>' % bot.user.id)
             question = mention_pattern.sub('', content).strip()
-            if not question and not image_attachments: return
+            if not question and not image_attachments and not audio_attachments: return
+
+        # Обработка голосовых сообщений
+        if audio_attachments:
+            transcription = await transcribe_audio(audio_attachments[0])
+            if transcription.startswith("⚠️"):
+                await message.reply(transcription)
+                return
+            question = f"{question} (Голосовое сообщение: {transcription})".strip()
+            if not question:
+                question = transcription
 
         if not question and image_attachments:
             question = "Опиши, что изображено на этой картинке."
@@ -184,11 +309,42 @@ async def on_ai_message(message, bot):
                     await message.reply("⚠️ Не удалось загрузить изображение.")
                     return
 
+            # === СБОР КОНТЕКСТА ===
+            context_lines = []
+            
+            # Время по МСК
+            try:
+                msk_time = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
+                context_lines.append(f"Сейчас {msk_time} по МСК.")
+            except: pass
+            
+            # Статус в голосовом канале
+            if message.author.voice and message.author.voice.channel:
+                context_lines.append(f"Игрок сидит в голосовом канале '{message.author.voice.channel.name}'.")
+            else:
+                context_lines.append("Игрок сейчас не в голосовом канале.")
+                
+            # Баланс казино
+            casino_cog = bot.get_cog("Casino")
+            if casino_cog:
+                try:
+                    balance = await casino_cog.store.balance(message.author.id)
+                    context_lines.append(f"Его баланс в казино: {balance} монет.")
+                except: pass
+            
+            # Поиск в интернете, если запрос требует свежих данных
+            search_keywords = ["поищи", "найди в интернете", "что нового", "последние новости", "курс", "погода"]
+            if any(kw in question.lower() for kw in search_keywords):
+                search_results = await web_search(question)
+                if search_results:
+                    context_lines.append(f"Результаты поиска в интернете:\n{search_results}")
+            
+            context_str = " ".join(context_lines)
+
             async with message.channel.typing():
                 user_name = message.author.display_name
-                answer = await ask_deepseek(history, image_url=image_url, user_name=user_name, question=question)
+                answer = await ask_deepseek(history, image_url=image_url, user_name=user_name, question=question, context_str=context_str)
                 
-                # Проверка на пустой ответ перед отправкой
                 if not answer or not answer.strip():
                     await message.reply("⚠️ Нейросеть не смогла ответить (пустой ответ).")
                     return
@@ -198,17 +354,18 @@ async def on_ai_message(message, bot):
                 if len(history) > MAX_HISTORY_LENGTH: history = history[-MAX_HISTORY_LENGTH:]
                 
                 conversations[conv_id] = history
+                save_ai_memory(conversations)
                 
                 sent_messages = await send_long_answer(message, answer)
                 for msg in sent_messages: msg_to_conv[msg.id] = conv_id
                 msg_to_conv[message.id] = conv_id
                 
-                # Защита от утечки памяти
                 if len(msg_to_conv) > 5000:
                     msg_to_conv.clear()
-                    logger.info("Очищен кэш msg_to_conv во избежание утечки памяти.")
 
 async def clear_history(user_id):
+    global conversations
     conversations.clear()
     msg_to_conv.clear()
+    save_ai_memory(conversations)
     return True
