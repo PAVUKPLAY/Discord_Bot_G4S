@@ -36,7 +36,7 @@ def get_whisper_model():
         return None
     if whisper_model is None:
         logger.info("Загрузка модели faster-whisper (small, int8)...")
-        # Используем small для лучшего распознавания, int8 для экономии RAM
+        # Модель small понимает речь лучше, int8 экономит память
         whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
     return whisper_model
 
@@ -138,7 +138,6 @@ async def send_long_answer(destination, text):
 # ==================== ОЧИСТКА ТЕКСТА ДЛЯ TTS ====================
 def clean_text_for_tts(text: str) -> str:
     """Оставляет только буквы, цифры, пробелы и базовую пунктуацию."""
-    # Удаляем Markdown, ссылки и спецсимволы
     text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text) # Ссылки
     text = re.sub(r'http\S+', '', text)
     text = re.sub(r'[*_`~#«»—–]', '', text) # Маркдаун и типографские символы
@@ -150,7 +149,6 @@ async def send_voice_answer(destination, text):
     """Генерирует TTS, конвертирует в OGG и отправляет голосовым сообщением."""
     clean_text = clean_text_for_tts(text)
     
-    # Если после очистки ничего не осталось, отправляем текст
     if not clean_text:
         await send_long_answer(destination, text)
         return
@@ -161,11 +159,11 @@ async def send_voice_answer(destination, text):
     temp_mp3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
     temp_ogg = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg").name
 
-    # Делаем 3 попытки генерации (на случай сбоя API Microsoft)
     for attempt in range(3):
         try:
-            communicate = edge_tts.Communicate(clean_text, voice="ru-RU-DmitryNeural")
-            await communicate.save(temp_mp3)
+            # ИСПОЛЬЗУЕМ АСИНХРОННЫЙ КОНТЕКСТНЫЙ МЕНЕДЖЕР И ЖЕНСКИЙ ГОЛОС
+            async with edge_tts.Communicate(clean_text, voice="ru-RU-SvetlanaNeural") as communicate:
+                await communicate.save(temp_mp3)
 
             subprocess.run(
                 ["ffmpeg", "-y", "-i", temp_mp3, "-c:a", "libopus", "-b:a", "48k", temp_ogg],
@@ -178,19 +176,18 @@ async def send_voice_answer(destination, text):
                     await destination.reply(file=file)
                 else:
                     await destination.send(file=file)
-            return # Успех! Выходим из цикла
-
+            return # Успех
         except Exception as e:
             logger.warning(f"Попытка {attempt+1} генерации TTS не удалась: {e}")
-            await asyncio.sleep(1) # Ждем перед повтором
+            await asyncio.sleep(2)
 
-    # Если все 3 попытки провалились
-    logger.error(f"Ошибка генерации голосового ответа после 3 попыток.")
+    logger.error("Ошибка генерации голосового ответа после 3 попыток.")
     await destination.channel.send("*(Голосовой ответ не удался)*")
     await send_long_answer(destination, text)
     
     if os.path.exists(temp_mp3): os.remove(temp_mp3)
     if os.path.exists(temp_ogg): os.remove(temp_ogg)
+
 # =============================================================
 
 async def transcribe_audio(attachment) -> str:
@@ -219,8 +216,8 @@ async def transcribe_audio(attachment) -> str:
         if not model:
             return "⚠️ Модель распознавания речи не загружена."
             
-        # ДОБАВЛЯЕМ ПОДСКАЗКУ ДЛЯ WHISPER
-        initial_prompt = "Арма 3, Arma 3, G4S, Discord, казино, радио, бот, отряд, смежка."
+        # Подсказка для Whisper, чтобы он знал игровые термины
+        initial_prompt = "Арма 3, Arma 3, G4S, Discord, казино, радио, бот, отряд, смежка, рулетка, слоты."
             
         segments, info = model.transcribe(wav_path, beam_size=5, initial_prompt=initial_prompt)
         text = " ".join(segment.text for segment in segments).strip()
