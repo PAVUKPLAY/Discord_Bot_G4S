@@ -10,21 +10,29 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL
 from toggle_manager import get_status
-from faster_whisper import WhisperModel
-from pydub import AudioSegment
+
+# Безопасный импорт библиотек для аудио
+try:
+    from faster_whisper import WhisperModel
+    from pydub import AudioSegment
+    AUDIO_SUPPORT = True
+except ImportError as e:
+    logging.error(f"Не удалось загрузить библиотеки для голоса: {e}")
+    AUDIO_SUPPORT = False
 
 logger = logging.getLogger(__name__)
 
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 AI_MEMORY_FILE = os.path.join(DATA_DIR, "ai_memory.json")
 
-# Инициализация модели Whisper (ленивая загрузка при первом использовании)
 whisper_model = None
 
 def get_whisper_model():
     global whisper_model
+    if not AUDIO_SUPPORT:
+        return None
     if whisper_model is None:
-        logger.info("Загрузка модели faster-whisper (tiny, int8)...")
+        logger.info("Загрузка модели faster-whisper...")
         whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
     return whisper_model
 
@@ -110,7 +118,6 @@ def split_text(text: str, limit: int = 1990) -> list:
 async def send_long_answer(destination, text):
     chunks = [c for c in split_text(text) if c.strip()]
     if not chunks: return []
-        
     total = len(chunks)
     sent_messages = []
     for i, chunk in enumerate(chunks):
@@ -125,6 +132,8 @@ async def send_long_answer(destination, text):
     return sent_messages
 
 async def transcribe_audio(attachment) -> str:
+    if not AUDIO_SUPPORT:
+        return "⚠️ Библиотеки для распознавания голоса не установлены."
     temp_path = None
     wav_path = None
     try:
@@ -145,8 +154,10 @@ async def transcribe_audio(attachment) -> str:
         audio.export(wav_path, format="wav")
         
         model = get_whisper_model()
+        if not model:
+            return "⚠️ Модель распознавания речи не загружена."
+            
         segments, info = model.transcribe(wav_path, beam_size=5)
-        
         text = " ".join(segment.text for segment in segments).strip()
         if not text:
             return "⚠️ Не удалось распознать речь в голосовом сообщении."
@@ -155,52 +166,31 @@ async def transcribe_audio(attachment) -> str:
         logger.error(f"Ошибка распознавания аудио: {e}")
         return "⚠️ Ошибка при распознавании голосового сообщения."
     finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
-        if wav_path and os.path.exists(wav_path):
-            os.remove(wav_path)
+        if temp_path and os.path.exists(temp_path): os.remove(temp_path)
+        if wav_path and os.path.exists(wav_path): os.remove(wav_path)
 
 async def web_search(query: str) -> str:
-    if not DEEPSEEK_API_KEY:
-        return ""
+    if not DEEPSEEK_API_KEY: return ""
     url = "https://api.deepseek.com/v1/tools/search"
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "query": query,
-        "count": 3,
-        "need_content": False
-    }
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    payload = {"query": query, "count": 3, "need_content": False}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload, timeout=30) as resp:
-                if resp.status != 200:
-                    logger.error(f"Search API вернул {resp.status}")
-                    return ""
+                if resp.status != 200: return ""
                 data = await resp.json()
                 results = data.get("results", [])
-                if not results:
-                    return ""
-                snippets = []
-                for r in results:
-                    title = r.get("title", "")
-                    summary = r.get("summary", "") or r.get("snippet", "")
-                    if summary:
-                        snippets.append(f"**{title}**: {summary}")
+                if not results: return ""
+                snippets = [f"**{r.get('title', '')}**: {r.get('summary', '')}" for r in results if r.get('summary')]
                 return "\n\n".join(snippets)
     except Exception as e:
-        logger.error(f"Ошибка поиска в интернете: {e}")
+        logger.error(f"Ошибка поиска: {e}")
         return ""
 
 async def ask_deepseek(history: list, image_url: str = None, user_name: str = "", question: str = "", context_str: str = "") -> str:
     if not DEEPSEEK_API_KEY: return "⚠️ API-ключ DeepSeek не настроен."
 
-    if context_str:
-        content_str = f"[Система]: {context_str}\n[{user_name}]: {question}"
-    else:
-        content_str = f"[{user_name}]: {question}"
+    content_str = f"[Система]: {context_str}\n[{user_name}]: {question}" if context_str else f"[{user_name}]: {question}"
 
     if image_url:
         user_content = [
@@ -226,19 +216,13 @@ async def ask_deepseek(history: list, image_url: str = None, user_name: str = ""
                     if resp.status == 402: return "💳 **Недостаточно средств на аккаунте DeepSeek.**"
                     return f"❌ Ошибка API DeepSeek {resp.status}: {error_msg}"
                 data = await resp.json()
-                
                 try:
                     content = data["choices"][0]["message"]["content"]
-                    if not content or not content.strip():
-                        return "⚠️ Нейросеть вернула пустой ответ."
+                    if not content or not content.strip(): return "⚠️ Нейросеть вернула пустой ответ."
                     return content.strip()
-                except (KeyError, IndexError):
-                    return "⚠️ Нейросеть вернула некорректный ответ."
-                    
-        except asyncio.TimeoutError:
-            return "⏰ DeepSeek не ответил вовремя."
-        except Exception as e:
-            return f"⚠️ Ошибка: {str(e)}"
+                except (KeyError, IndexError): return "⚠️ Нейросеть вернула некорректный ответ."
+        except asyncio.TimeoutError: return "⏰ DeepSeek не ответил вовремя."
+        except Exception as e: return f"⚠️ Ошибка: {str(e)}"
 
 async def on_ai_message(message, bot):
     if message.author == bot.user: return
@@ -268,11 +252,9 @@ async def on_ai_message(message, bot):
                 await message.reply(transcription)
                 return
             question = f"{question} (Голосовое сообщение: {transcription})".strip()
-            if not question:
-                question = transcription
+            if not question: question = transcription
 
-        if not question and image_attachments:
-            question = "Опиши, что изображено на этой картинке."
+        if not question and image_attachments: question = "Опиши, что изображено на этой картинке."
 
         if question:
             conv_id = str(message.id) 
@@ -293,27 +275,19 @@ async def on_ai_message(message, bot):
                             if resp.status == 200:
                                 img_data = await resp.read()
                                 b64 = base64.b64encode(img_data).decode('utf-8')
-                                mime = att.content_type or "image/jpeg"
-                                image_url = f"data:{mime};base64,{b64}"
+                                image_url = f"data:{att.content_type or 'image/jpeg'};base64,{b64}"
                 except Exception:
                     await message.reply("⚠️ Не удалось загрузить изображение.")
                     return
 
-            # === СБОР КОНТЕКСТА (Оставлено только время и поиск) ===
             context_lines = []
-            
-            # Время по МСК
-            try:
-                msk_time = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
-                context_lines.append(f"Сейчас {msk_time} по МСК.")
+            try: context_lines.append(f"Сейчас {datetime.now(ZoneInfo('Europe/Moscow')).strftime('%H:%M')} по МСК.")
             except: pass
             
-            # Поиск в интернете, если запрос требует свежих данных
             search_keywords = ["поищи", "найди в интернете", "что нового", "последние новости", "курс", "погода"]
             if any(kw in question.lower() for kw in search_keywords):
                 search_results = await web_search(question)
-                if search_results:
-                    context_lines.append(f"Результаты поиска в интернете:\n{search_results}")
+                if search_results: context_lines.append(f"Результаты поиска в интернете:\n{search_results}")
             
             context_str = " ".join(context_lines)
 
@@ -335,9 +309,7 @@ async def on_ai_message(message, bot):
                 sent_messages = await send_long_answer(message, answer)
                 for msg in sent_messages: msg_to_conv[msg.id] = conv_id
                 msg_to_conv[message.id] = conv_id
-                
-                if len(msg_to_conv) > 5000:
-                    msg_to_conv.clear()
+                if len(msg_to_conv) > 5000: msg_to_conv.clear()
 
 async def clear_history(user_id):
     global conversations
