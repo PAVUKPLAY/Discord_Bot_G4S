@@ -81,11 +81,15 @@ async def update_status(bot, monitor_message):
             ru_players = sorted([p for p in remaining_players if re.search(r'[а-яА-ЯёЁ]', p)])
             en_players = sorted([p for p in remaining_players if p not in ru_players])
             non_allowed_players = [p for p in all_names if p not in allowed_players]
-        except Exception:
+        except Exception as e:
+            logger.error(f"Ошибка получения данных от Arma 3: {e}")
             status_text = "🔴 НЕДОСТУПЕН"
             online_text = "0/0"
             load_bar = "░" * 10
-            g4s_players, ru_players, en_players, non_allowed_players = [], [], [], []
+            g4s_players = []
+            ru_players, en_players = [], []
+            non_allowed_players = []
+            allowed_players = [] # <--- ИСПРАВЛЕНИЕ: обнуляем переменную при ошибке
 
         content_block = f"```\n📡 СТАТУС       | {status_text}\n👥 ОНЛАЙН       | {online_text}\n🖥️ СЕРВЕР       | {SERVER_IP}:{SERVER_PORT}\n📊 НАГРУЗКА     | {load_bar}\n```"
         embed = discord.Embed(title="🛡️ Group 4 Securicor • Мониторинг G4S", color=discord.Color.dark_theme() if "НЕДОСТУПЕН" not in status_text else discord.Color.red())
