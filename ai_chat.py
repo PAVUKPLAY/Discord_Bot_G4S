@@ -25,7 +25,6 @@ def get_whisper_model():
     global whisper_model
     if whisper_model is None:
         logger.info("Загрузка модели faster-whisper (tiny, int8)...")
-        # tiny быстрее, но менее точен. base - компромисс для CPU.
         whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
     return whisper_model
 
@@ -76,8 +75,7 @@ SYSTEM_PROMPT = {
         "- Никаких умных слов ради умности. Если слово можно заменить простым — заменяй.\n"
         "- Не соглашаешься автоматически — споришь, если собеседник несёт чушь.\n\n"
         "ВАЖНОЕ ПРАВИЛО ДЛЯ ДИАЛОГА:\n"
-        "В беседе могут участвовать несколько человек. Формат входящих сообщений: '[Имя_игрока]: текст'. Учитывай это при ответе.\n"
-        "Если в системном промпте передана информация о балансе или статусе игрока, используй её, чтобы подколоть или поддержать тему."
+        "В беседе могут участвовать несколько человек. Формат входящих сообщений: '[Имя_игрока]: текст'. Учитывай это при ответе."
     )
 }
 
@@ -127,7 +125,6 @@ async def send_long_answer(destination, text):
     return sent_messages
 
 async def transcribe_audio(attachment) -> str:
-    """Скачивает аудио, конвертирует в WAV и распознаёт речь."""
     temp_path = None
     wav_path = None
     try:
@@ -137,14 +134,12 @@ async def transcribe_audio(attachment) -> str:
                     return "⚠️ Не удалось скачать голосовое сообщение."
                 audio_data = await resp.read()
         
-        # Создаём временные файлы
         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as f:
             f.write(audio_data)
             temp_path = f.name
             
         wav_path = temp_path.replace(".ogg", ".wav")
         
-        # Конвертация в WAV (16kHz, mono) для Whisper
         audio = AudioSegment.from_file(temp_path)
         audio = audio.set_frame_rate(16000).set_channels(1)
         audio.export(wav_path, format="wav")
@@ -166,7 +161,6 @@ async def transcribe_audio(attachment) -> str:
             os.remove(wav_path)
 
 async def web_search(query: str) -> str:
-    """Выполняет поиск в интернете через DeepSeek Search API."""
     if not DEEPSEEK_API_KEY:
         return ""
     url = "https://api.deepseek.com/v1/tools/search"
@@ -189,7 +183,6 @@ async def web_search(query: str) -> str:
                 results = data.get("results", [])
                 if not results:
                     return ""
-                # Формируем краткую сводку из результатов
                 snippets = []
                 for r in results:
                     title = r.get("title", "")
@@ -256,11 +249,9 @@ async def on_ai_message(message, bot):
     is_mentioned = bot.user.mentioned_in(message)
     ucheniy_match = re.match(r'^уч[её]ный\s+', content, re.IGNORECASE)
 
-    # Проверяем вложения: изображения и аудио
     image_attachments = [att for att in message.attachments if att.content_type and att.content_type.startswith("image/")]
     audio_attachments = [att for att in message.attachments if att.content_type and att.content_type.startswith("audio/") or (att.filename and att.filename.endswith(('.ogg', '.mp3', '.wav', '.m4a')))]
 
-    # Если есть вложения, но нет триггера - игнорируем
     if (image_attachments or audio_attachments) and not (ucheniy_match or is_mentioned): return
 
     if ucheniy_match or is_mentioned:
@@ -271,7 +262,6 @@ async def on_ai_message(message, bot):
             question = mention_pattern.sub('', content).strip()
             if not question and not image_attachments and not audio_attachments: return
 
-        # Обработка голосовых сообщений
         if audio_attachments:
             transcription = await transcribe_audio(audio_attachments[0])
             if transcription.startswith("⚠️"):
@@ -309,7 +299,7 @@ async def on_ai_message(message, bot):
                     await message.reply("⚠️ Не удалось загрузить изображение.")
                     return
 
-            # === СБОР КОНТЕКСТА ===
+            # === СБОР КОНТЕКСТА (Оставлено только время и поиск) ===
             context_lines = []
             
             # Время по МСК
@@ -317,20 +307,6 @@ async def on_ai_message(message, bot):
                 msk_time = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
                 context_lines.append(f"Сейчас {msk_time} по МСК.")
             except: pass
-            
-            # Статус в голосовом канале
-            if message.author.voice and message.author.voice.channel:
-                context_lines.append(f"Игрок сидит в голосовом канале '{message.author.voice.channel.name}'.")
-            else:
-                context_lines.append("Игрок сейчас не в голосовом канале.")
-                
-            # Баланс казино
-            casino_cog = bot.get_cog("Casino")
-            if casino_cog:
-                try:
-                    balance = await casino_cog.store.balance(message.author.id)
-                    context_lines.append(f"Его баланс в казино: {balance} монет.")
-                except: pass
             
             # Поиск в интернете, если запрос требует свежих данных
             search_keywords = ["поищи", "найди в интернете", "что нового", "последние новости", "курс", "погода"]
