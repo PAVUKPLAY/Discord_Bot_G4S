@@ -142,8 +142,10 @@ def clean_text_for_tts(text: str) -> str:
     text = re.sub(r'[^а-яА-ЯёЁa-zA-Z0-9\s.,!?;:()]', '', text)
     return text.strip()
 
+# ==================== ОТПРАВКА ГОЛОСОВОГО СООБЩЕНИЯ ====================
 async def send_voice_answer(destination, text):
     clean_text = clean_text_for_tts(text)
+    
     if not clean_text:
         await send_long_answer(destination, text)
         return
@@ -156,33 +158,58 @@ async def send_voice_answer(destination, text):
 
     for attempt in range(3):
         try:
-            # ИСПРАВЛЕНО: убираем async with, используем прямой вызов
+            # 1. Генерация TTS
             communicate = edge_tts.Communicate(clean_text, voice="ru-RU-SvetlanaNeural")
             await communicate.save(temp_mp3)
 
+            # 2. Конвертация в OGG/Opus
             subprocess.run(
                 ["ffmpeg", "-y", "-i", temp_mp3, "-c:a", "libopus", "-b:a", "48k", temp_ogg],
                 check=True, capture_output=True
             )
 
+            # 3. Получение длительности для корректного отображения плеера
+            try:
+                from mutagen.oggopus import OggOpus
+                info = OggOpus(temp_ogg)
+                duration_secs = info.info.length
+            except Exception:
+                duration_secs = max(1.0, os.path.getsize(temp_ogg) / 2000.0)
+
+            # 4. Отправка как голосового сообщения
             with open(temp_ogg, "rb") as f:
-                file = discord.File(f, filename="voice-message.ogg")
+                file = discord.File(
+                    f, 
+                    filename="voice-message.ogg",
+                    duration=duration_secs,
+                    waveform=bytes([128] * 256)  # Прямая волна
+                )
+                
+                # Отправляем с флагом голосового сообщения
                 if hasattr(destination, 'reply'):
-                    await destination.reply(file=file)
+                    await destination.reply(file=file, flags=discord.MessageFlags(is_voice_message=True))
                 else:
-                    await destination.send(file=file)
+                    await destination.send(file=file, flags=discord.MessageFlags(is_voice_message=True))
             return
+            
         except Exception as e:
-            logger.warning(f"Попытка {attempt+1} генерации TTS не удалась: {e}")
+            logger.warning(f"Попытка {attempt+1} генерации голосового ответа не удалась: {e}")
             await asyncio.sleep(2)
 
-    logger.error("Ошибка генерации голосового ответа после 3 попыток.")
+    # Если все попытки провалились — отправляем как обычный файл
+    logger.error("Ошибка генерации голосового ответа после 3 попыток. Отправляю файлом.")
+    with open(temp_ogg, "rb") as f:
+        file = discord.File(f, filename="voice-message.ogg")
+        if hasattr(destination, 'reply'):
+            await destination.reply(file=file)
+        else:
+            await destination.send(file=file)
+        
     await destination.channel.send("*(Голосовой ответ не удался)*")
     await send_long_answer(destination, text)
 
     if os.path.exists(temp_mp3): os.remove(temp_mp3)
     if os.path.exists(temp_ogg): os.remove(temp_ogg)
-
 # =============================================================
 
 async def transcribe_audio(attachment) -> str:
@@ -213,7 +240,6 @@ async def transcribe_audio(attachment) -> str:
 
         initial_prompt = "Арма 3, Arma 3, G4S, Discord, казино, радио, бот, отряд, смежка, рулетка, слоты."
 
-        # ИСПРАВЛЕНО: выносим синхронный transcribe в отдельный поток, чтобы не блокировать event loop
         def _transcribe():
             segments, _ = model.transcribe(wav_path, beam_size=5, initial_prompt=initial_prompt)
             return " ".join(segment.text for segment in segments).strip()
