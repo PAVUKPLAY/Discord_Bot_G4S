@@ -36,7 +36,6 @@ def get_whisper_model():
         return None
     if whisper_model is None:
         logger.info("Загрузка модели faster-whisper (small, int8)...")
-        # Модель small понимает речь лучше, int8 экономит память
         whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
     return whisper_model
 
@@ -137,18 +136,14 @@ async def send_long_answer(destination, text):
 
 # ==================== ОЧИСТКА ТЕКСТА ДЛЯ TTS ====================
 def clean_text_for_tts(text: str) -> str:
-    """Оставляет только буквы, цифры, пробелы и базовую пунктуацию."""
-    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text) # Ссылки
+    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
     text = re.sub(r'http\S+', '', text)
-    text = re.sub(r'[*_`~#«»—–]', '', text) # Маркдаун и типографские символы
-    # Оставляем только кириллицу, латиницу, цифры, пробелы и . , ! ? ; : ( )
+    text = re.sub(r'[*_`~#«»—–]', '', text)
     text = re.sub(r'[^а-яА-ЯёЁa-zA-Z0-9\s.,!?;:()]', '', text)
     return text.strip()
 
 async def send_voice_answer(destination, text):
-    """Генерирует TTS, конвертирует в OGG и отправляет голосовым сообщением."""
     clean_text = clean_text_for_tts(text)
-    
     if not clean_text:
         await send_long_answer(destination, text)
         return
@@ -161,9 +156,9 @@ async def send_voice_answer(destination, text):
 
     for attempt in range(3):
         try:
-            # ИСПОЛЬЗУЕМ АСИНХРОННЫЙ КОНТЕКСТНЫЙ МЕНЕДЖЕР И ЖЕНСКИЙ ГОЛОС
-            async with edge_tts.Communicate(clean_text, voice="ru-RU-SvetlanaNeural") as communicate:
-                await communicate.save(temp_mp3)
+            # ИСПРАВЛЕНО: убираем async with, используем прямой вызов
+            communicate = edge_tts.Communicate(clean_text, voice="ru-RU-SvetlanaNeural")
+            await communicate.save(temp_mp3)
 
             subprocess.run(
                 ["ffmpeg", "-y", "-i", temp_mp3, "-c:a", "libopus", "-b:a", "48k", temp_ogg],
@@ -176,7 +171,7 @@ async def send_voice_answer(destination, text):
                     await destination.reply(file=file)
                 else:
                     await destination.send(file=file)
-            return # Успех
+            return
         except Exception as e:
             logger.warning(f"Попытка {attempt+1} генерации TTS не удалась: {e}")
             await asyncio.sleep(2)
@@ -184,7 +179,7 @@ async def send_voice_answer(destination, text):
     logger.error("Ошибка генерации голосового ответа после 3 попыток.")
     await destination.channel.send("*(Голосовой ответ не удался)*")
     await send_long_answer(destination, text)
-    
+
     if os.path.exists(temp_mp3): os.remove(temp_mp3)
     if os.path.exists(temp_ogg): os.remove(temp_ogg)
 
@@ -201,26 +196,30 @@ async def transcribe_audio(attachment) -> str:
                 if resp.status != 200:
                     return "⚠️ Не удалось скачать голосовое сообщение."
                 audio_data = await resp.read()
-        
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as f:
             f.write(audio_data)
             temp_path = f.name
-            
+
         wav_path = temp_path.replace(".ogg", ".wav")
-        
+
         audio = AudioSegment.from_file(temp_path)
         audio = audio.set_frame_rate(16000).set_channels(1)
         audio.export(wav_path, format="wav")
-        
+
         model = get_whisper_model()
         if not model:
             return "⚠️ Модель распознавания речи не загружена."
-            
-        # Подсказка для Whisper, чтобы он знал игровые термины
+
         initial_prompt = "Арма 3, Arma 3, G4S, Discord, казино, радио, бот, отряд, смежка, рулетка, слоты."
-            
-        segments, info = model.transcribe(wav_path, beam_size=5, initial_prompt=initial_prompt)
-        text = " ".join(segment.text for segment in segments).strip()
+
+        # ИСПРАВЛЕНО: выносим синхронный transcribe в отдельный поток, чтобы не блокировать event loop
+        def _transcribe():
+            segments, _ = model.transcribe(wav_path, beam_size=5, initial_prompt=initial_prompt)
+            return " ".join(segment.text for segment in segments).strip()
+
+        text = await asyncio.get_running_loop().run_in_executor(None, _transcribe)
+
         if not text:
             return "⚠️ Не удалось распознать речь в голосовом сообщении."
         return text
@@ -321,11 +320,11 @@ async def on_ai_message(message, bot):
         if not question and image_attachments: question = "Опиши, что изображено на этой картинке."
 
         if question:
-            conv_id = str(message.id) 
+            conv_id = str(message.id)
             if message.reference and message.reference.message_id:
                 ref_id = message.reference.message_id
                 if ref_id in msg_to_conv: conv_id = msg_to_conv[ref_id]
-            
+
             history = conversations.get(conv_id, [])
             image_url = None
             if image_attachments:
@@ -347,35 +346,35 @@ async def on_ai_message(message, bot):
             context_lines = []
             try: context_lines.append(f"Сейчас {datetime.now(ZoneInfo('Europe/Moscow')).strftime('%H:%M')} по МСК.")
             except: pass
-            
+
             search_keywords = ["поищи", "найди в интернете", "что нового", "последние новости", "курс", "погода"]
             if any(kw in question.lower() for kw in search_keywords):
                 search_results = await web_search(question)
                 if search_results: context_lines.append(f"Результаты поиска в интернете:\n{search_results}")
-            
+
             context_str = " ".join(context_lines)
 
             async with message.channel.typing():
                 user_name = message.author.display_name
                 answer = await ask_deepseek(history, image_url=image_url, user_name=user_name, question=question, context_str=context_str)
-                
+
                 if not answer or not answer.strip():
                     await message.reply("⚠️ Нейросеть не смогла ответить (пустой ответ).")
                     return
-                
+
                 history.append({"role": "user", "content": f"[{user_name}]: {question}"})
                 history.append({"role": "assistant", "content": answer})
                 if len(history) > MAX_HISTORY_LENGTH: history = history[-MAX_HISTORY_LENGTH:]
-                
+
                 conversations[conv_id] = history
                 save_ai_memory(conversations)
-                
+
                 if is_voice_input:
                     await send_voice_answer(message, answer)
                 else:
                     sent_messages = await send_long_answer(message, answer)
                     for msg in sent_messages: msg_to_conv[msg.id] = conv_id
-                
+
                 msg_to_conv[message.id] = conv_id
                 if len(msg_to_conv) > 5000: msg_to_conv.clear()
 
