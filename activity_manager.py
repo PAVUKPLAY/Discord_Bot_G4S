@@ -44,14 +44,23 @@ class ActivityStore:
                     last_date TEXT
                 )
             """)
+            # Миграция: добавляем дату вступления, если её нет (для красивого профиля)
+            try:
+                con.execute("ALTER TABLE activity ADD COLUMN join_date TEXT")
+            except sqlite3.OperationalError:
+                pass
 
     def _check_daily_reset(self, con, user_id):
         today = datetime.now().strftime("%Y-%m-%d")
-        row = con.execute("SELECT last_date FROM activity WHERE user_id=?", (user_id,)).fetchone()
-        if row and row["last_date"] != today:
-            con.execute("UPDATE activity SET voice_daily=0, messages_daily=0, last_date=? WHERE user_id=?", (today, user_id))
-        elif not row:
-            con.execute("INSERT INTO activity (user_id, last_date) VALUES (?, ?)", (user_id, today))
+        row = con.execute("SELECT last_date, join_date FROM activity WHERE user_id=?", (user_id,)).fetchone()
+        
+        if row:
+            if row["last_date"] != today:
+                con.execute("UPDATE activity SET voice_daily=0, messages_daily=0, last_date=? WHERE user_id=?", (today, user_id))
+            if not row["join_date"]:
+                con.execute("UPDATE activity SET join_date=? WHERE user_id=?", (today, user_id))
+        else:
+            con.execute("INSERT INTO activity (user_id, last_date, join_date) VALUES (?, ?, ?)", (user_id, today, today))
 
     def add_activity(self, user_id: int, voice_sec: int = 0, messages: int = 0):
         with self._connect() as con:
@@ -78,6 +87,7 @@ class ActivityStore:
                 WHERE {col_v} > 0 OR {col_m} > 0
                 ORDER BY {col_v} DESC LIMIT ?
             """, (limit,)).fetchall()
+
 
 class ActivityCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -123,30 +133,56 @@ class ActivityCog(commands.Cog):
         if message.author.bot or not message.guild: return
         await self.bot.loop.run_in_executor(None, self.store.add_activity, message.author.id, 0, 1)
 
+
+# ==================== UI (Кнопки) ====================
+
 class ActivityView(ui.View):
     def __init__(self, cog: ActivityCog):
         super().__init__(timeout=None)
         self.cog = cog
 
-    @ui.button(label="📊 Моя активность", style=discord.ButtonStyle.primary, custom_id="act_my")
-    async def my_activity(self, interaction: discord.Interaction, button: ui.Button):
+    @ui.button(label="👤 Мой профиль", style=discord.ButtonStyle.primary, custom_id="act_profile")
+    async def my_profile(self, interaction: discord.Interaction, button: ui.Button):
+        # 1. Получаем активность
         stats = await interaction.client.loop.run_in_executor(None, self.cog.store.get_user_stats, interaction.user.id)
-        embed = discord.Embed(title="📊 Ваша активность", color=discord.Color.blue())
+        
+        # 2. Получаем баланс казино (если модуль загружен)
+        casino_balance = 0
+        casino_cog = interaction.client.get_cog("Casino")
+        if casino_cog:
+            try:
+                casino_balance = await casino_cog.store.balance(interaction.user.id)
+            except Exception:
+                pass
+
+        embed = discord.Embed(title="👤 Ваш профиль", color=discord.Color.blue())
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        
         if not stats:
-            embed.description = "У вас пока нет активности."
+            embed.description = "Вы пока не проявляли активности. Общайтесь и сидите в войсах!"
         else:
+            join_date = stats['join_date'] if stats['join_date'] else "Неизвестно"
+            
+            embed.add_field(name="💰 Баланс казино", value=f"`{casino_balance} монет`", inline=True)
+            embed.add_field(name="📅 В отряде с", value=f"`{join_date}`", inline=True)
+            embed.add_field(name="⠀", value="⠀", inline=True) # пустышка для ровной сетки
+            
             embed.add_field(name="🎙️ В голосовых (всего)", value=f"`{fmt_time(stats['voice_total'])}`", inline=True)
             embed.add_field(name="💬 Сообщений (всего)", value=f"`{stats['messages_total']} шт.`", inline=True)
+            embed.add_field(name="⠀", value="⠀", inline=True)
+            
             embed.add_field(name="🎙️ В голосовых (сегодня)", value=f"`{fmt_time(stats['voice_daily'])}`", inline=True)
             embed.add_field(name="💬 Сообщений (сегодня)", value=f"`{stats['messages_daily']} шт.`", inline=True)
+            
         embed.set_footer(text="Code by PAVUK")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @ui.button(label="🕒 24 часа", style=discord.ButtonStyle.secondary, custom_id="act_daily")
+    @ui.button(label="🕒 Топ 24 часа", style=discord.ButtonStyle.secondary, custom_id="act_daily")
     async def daily_leaders(self, interaction: discord.Interaction, button: ui.Button):
         rows = await interaction.client.loop.run_in_executor(None, self.cog.store.get_leaderboard, True, 10)
+        
         embed = discord.Embed(title="🔥 Самые активные за 24 часа", color=discord.Color.orange())
+        
         if not rows:
             embed.description = "За последние 24 часа активности не было."
         else:
@@ -156,13 +192,16 @@ class ActivityView(ui.View):
                 name = member.display_name if member else f"Игрок {row['user_id']}"
                 lines.append(f"**{i}.** {discord.utils.escape_markdown(name)} | 🎙️ {fmt_time(row['voice'])} | 💬 {row['msgs']}")
             embed.description = "\n".join(lines)
+            
         embed.set_footer(text="Code by PAVUK")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @ui.button(label="🏆 Лидеры", style=discord.ButtonStyle.success, custom_id="act_total")
+    @ui.button(label="🎖️ Топ за всё время", style=discord.ButtonStyle.success, custom_id="act_total")
     async def total_leaders(self, interaction: discord.Interaction, button: ui.Button):
         rows = await interaction.client.loop.run_in_executor(None, self.cog.store.get_leaderboard, False, 10)
-        embed = discord.Embed(title="🏆 Лучшие бойцы (За всё время)", color=discord.Color.gold())
+        
+        embed = discord.Embed(title="🎖️ Лучшие бойцы (За всё время)", color=discord.Color.brand_green())
+        
         if not rows:
             embed.description = "База активности пока пуста."
         else:
@@ -172,8 +211,10 @@ class ActivityView(ui.View):
                 name = member.display_name if member else f"Игрок {row['user_id']}"
                 lines.append(f"**{i}.** {discord.utils.escape_markdown(name)} | 🎙️ {fmt_time(row['voice'])} | 💬 {row['msgs']}")
             embed.description = "\n".join(lines)
+            
         embed.set_footer(text="Code by PAVUK")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ActivityCog(bot))
@@ -186,18 +227,27 @@ async def setup_activity_panel(bot: commands.Bot):
     if not channel:
         try: channel = await bot.fetch_channel(ACTIVITY_CHANNEL_ID)
         except Exception: return
+
     embed = discord.Embed(
         title="📈 Активность отряда G4S",
-        description="Здесь отслеживается ваша активность на сервере.\nУчитывается время в голосовых каналах и количество сообщений.\n\nНажмите на кнопку ниже, чтобы посмотреть статистику.",
+        description=(
+            "Здесь отслеживается жизнь отряда.\n"
+            "Смотрите свой личный профиль и следите за топами бойцов.\n"
+            "Учитывается время в голосовых каналах и количество сообщений."
+        ),
         color=discord.Color.brand_green()
     )
     embed.set_footer(text="Code by PAVUK")
+    
     view = ActivityView(cog)
+
+    # Ищем старую панель, чтобы обновить её без дублей
     async for msg in channel.history(limit=20):
         if msg.author == bot.user and msg.embeds and msg.components:
             for row in msg.components:
                 for comp in row.children:
-                    if hasattr(comp, 'custom_id') and comp.custom_id == "act_my":
+                    if hasattr(comp, 'custom_id') and comp.custom_id == "act_profile":
                         await msg.edit(embed=embed, view=view)
                         return
+
     await channel.send(embed=embed, view=view)
