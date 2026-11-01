@@ -7,6 +7,7 @@ from pathlib import Path
 import discord
 from discord import ui
 from discord.ext import commands
+from discord.errors import HTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -22,41 +23,69 @@ MAX_BET = 100_000
 SLOT_SYMBOLS = ["🍒", "🍋", "🍇", "🍉", "⭐", "💎"]
 SLOT_WEIGHTS = [30, 25, 20, 15, 8, 2]
 
-def fmt(value: int) -> str: return f"{value:,}".replace(",", " ")
+# Товары в магазине: (id, название, цена, описание)
+SHOP_ITEMS = {
+    "radio_skip": ("🎫 Пропуск смены радио", 5000, "Позволяет сменить станцию в войсе без голосования (одноразовый)."),
+    "daily_boost": ("💎 Бустер ежедневного бонуса", 10000, "Навсегда увеличивает ваш ежедневный бонус на 100 монет."),
+    "custom_role": ("🎨 Кастомная роль", 20000, "Бот создаст вам личную роль с выбранным названием и цветом.")
+}
+
+def fmt(value: int) -> str: 
+    return f"{value:,}".replace(",", " ")
+
 def validate_bet(bet: int):
-    if bet < MIN_BET or bet > MAX_BET: raise ValueError(f"Ставка должна быть от {fmt(MIN_BET)} до {fmt(MAX_BET)}.")
+    if bet < MIN_BET or bet > MAX_BET: 
+        raise ValueError(f"Ставка должна быть от {fmt(MIN_BET)} до {fmt(MAX_BET)}.")
 
 class CasinoStore:
     def __init__(self, path: Path = DB_PATH):
         self.path = path
         self.lock = asyncio.Lock()
         self._init_db()
+
     def _connect(self):
         con = sqlite3.connect(self.path, timeout=15)
         con.row_factory = sqlite3.Row
         return con
+
     def _init_db(self):
         with self._connect() as con:
             con.execute("""CREATE TABLE IF NOT EXISTS casino_users (user_id INTEGER PRIMARY KEY, balance INTEGER NOT NULL DEFAULT 1000, daily_claimed INTEGER NOT NULL DEFAULT 0, wins INTEGER NOT NULL DEFAULT 0, losses INTEGER NOT NULL DEFAULT 0, wagered INTEGER NOT NULL DEFAULT 0, net_profit INTEGER NOT NULL DEFAULT 0)""")
             con.execute("""CREATE TABLE IF NOT EXISTS casino_history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, game TEXT NOT NULL, bet INTEGER NOT NULL, delta INTEGER NOT NULL, balance_after INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+            con.execute("""CREATE TABLE IF NOT EXISTS casino_inventory (user_id INTEGER NOT NULL, item_id TEXT NOT NULL, amount INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (user_id, item_id))""")
+            
+            # Миграция: добавляем колонку для бустера, если её нет
+            try:
+                con.execute("ALTER TABLE casino_users ADD COLUMN daily_boost INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+
     def _ensure_user(self, con, user_id: int):
         con.execute("INSERT OR IGNORE INTO casino_users(user_id, balance) VALUES (?, ?)", (user_id, STARTING_BALANCE))
+
     async def balance(self, user_id: int) -> int:
         async with self.lock:
             with self._connect() as con:
                 self._ensure_user(con, user_id)
                 return int(con.execute("SELECT balance FROM casino_users WHERE user_id=?", (user_id,)).fetchone()["balance"])
+
     async def daily(self, user_id: int):
         async with self.lock:
             with self._connect() as con:
                 self._ensure_user(con, user_id)
-                row = con.execute("SELECT balance, daily_claimed FROM casino_users WHERE user_id=?", (user_id,)).fetchone()
+                row = con.execute("SELECT balance, daily_claimed, daily_boost FROM casino_users WHERE user_id=?", (user_id,)).fetchone()
                 now_day = int(__import__("time").time() // 86400)
-                if int(row["daily_claimed"]) >= now_day: return False, int(row["balance"])
-                new_balance = int(row["balance"]) + DAILY_REWARD
+                if int(row["daily_claimed"]) >= now_day: 
+                    return False, int(row["balance"]), 0
+                
+                boost = row["daily_boost"] or 0
+                reward = DAILY_REWARD + (boost * 100)
+                
+                new_balance = int(row["balance"]) + reward
                 con.execute("UPDATE casino_users SET balance=?, daily_claimed=? WHERE user_id=?", (new_balance, now_day, user_id))
-                con.execute("INSERT INTO casino_history(user_id, game, bet, delta, balance_after) VALUES (?, 'Ежедневный бонус', 0, ?, ?)", (user_id, DAILY_REWARD, new_balance))
-                return True, new_balance
+                con.execute("INSERT INTO casino_history(user_id, game, bet, delta, balance_after) VALUES (?, 'Ежедневный бонус', 0, ?, ?)", (user_id, reward, new_balance))
+                return True, new_balance, reward
+
     async def play(self, user_id: int, game: str, bet: int, delta: int):
         async with self.lock:
             with self._connect() as con:
@@ -70,14 +99,115 @@ class CasinoStore:
                 con.execute("UPDATE casino_users SET balance=?, wins=wins+?, losses=losses+?, wagered=wagered+?, net_profit=net_profit+? WHERE user_id=?", (new_balance, int(won), int(delta < 0), bet, delta, user_id))
                 con.execute("INSERT INTO casino_history(user_id, game, bet, delta, balance_after) VALUES (?, ?, ?, ?, ?)", (user_id, game, bet, delta, new_balance))
                 return new_balance
+
     async def leaderboard(self, limit: int = 10):
         async with self.lock:
             with self._connect() as con:
                 return con.execute("SELECT user_id, balance, wins, net_profit FROM casino_users ORDER BY balance DESC LIMIT ?", (limit,)).fetchall()
+
     async def history(self, user_id: int, limit: int = 5):
         async with self.lock:
             with self._connect() as con:
                 return con.execute("SELECT game, bet, delta, balance_after, created_at FROM casino_history WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit)).fetchall()
+
+    # === НОВЫЕ МЕТОДЫ ДЛЯ МАГАЗИНА ===
+    async def buy_item(self, user_id: int, item_id: str) -> tuple[bool, str]:
+        if item_id not in SHOP_ITEMS: return False, "Товар не найден."
+        
+        name, price, _ = SHOP_ITEMS[item_id]
+        
+        async with self.lock:
+            with self._connect() as con:
+                self._ensure_user(con, user_id)
+                balance = int(con.execute("SELECT balance FROM casino_users WHERE user_id=?", (user_id,)).fetchone()["balance"])
+                
+                if balance < price:
+                    return False, f"❌ Недостаточно монет. Нужно {fmt(price)}, у вас {fmt(balance)}."
+                
+                # Списываем деньги
+                con.execute("UPDATE casino_users SET balance = balance - ? WHERE user_id=?", (price, user_id))
+                
+                # Выдаем товар
+                if item_id == "daily_boost":
+                    con.execute("UPDATE casino_users SET daily_boost = daily_boost + 1 WHERE user_id=?", (user_id,))
+                else:
+                    # Для остальных товаров добавляем в инвентарь
+                    con.execute("""
+                        INSERT INTO casino_inventory (user_id, item_id, amount) VALUES (?, ?, 1)
+                        ON CONFLICT(user_id, item_id) DO UPDATE SET amount = amount + 1
+                    """, (user_id, item_id))
+                
+                # Записываем в историю
+                con.execute("INSERT INTO casino_history(user_id, game, bet, delta, balance_after) VALUES (?, 'Покупка в магазине', 0, ?, ?)", (user_id, -price, balance - price))
+                return True, f"✅ Вы успешно купили **{name}** за {fmt(price)} монет!"
+
+    async def get_inventory(self, user_id: int) -> dict:
+        async with self.lock:
+            with self._connect() as con:
+                rows = con.execute("SELECT item_id, amount FROM casino_inventory WHERE user_id=?", (user_id,)).fetchall()
+                return {row["item_id"]: row["amount"] for row in rows}
+
+    async def use_item(self, user_id: int, item_id: str) -> bool:
+        async with self.lock:
+            with self._connect() as con:
+                row = con.execute("SELECT amount FROM casino_inventory WHERE user_id=? AND item_id=?", (user_id, item_id)).fetchone()
+                if row and row["amount"] > 0:
+                    con.execute("UPDATE casino_inventory SET amount = amount - 1 WHERE user_id=? AND item_id=?", (user_id, item_id))
+                    return True
+                return False
+
+# ==================== МОДАЛЬНЫЕ ОКНА ====================
+
+class CustomRoleModal(ui.Modal, title="Создание кастомной роли"):
+    role_name = ui.TextInput(label="Название роли", placeholder="Например: Кибер-Кот", max_length=32, required=True)
+    color_hex = ui.TextInput(label="Цвет (HEX)", placeholder="#FF0000", max_length=7, required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            color = discord.Color.from_str(self.color_hex.value)
+        except ValueError:
+            await interaction.response.send_message("❌ Неверный формат цвета. Используйте HEX (например, #FF0000).", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            role = await interaction.guild.create_role(name=self.role_name.value, color=color)
+            await interaction.user.add_roles(role)
+            await interaction.followup.send(f"✅ Роль **{role.name}** успешно создана и выдана вам!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ У бота нет прав на создание ролей.", ephemeral=True)
+        except HTTPException as e:
+            await interaction.followup.send(f"❌ Ошибка Discord: {e}", ephemeral=True)
+
+class ShopSelect(ui.Select):
+    def __init__(self, cog):
+        self.cog = cog
+        options = []
+        for item_id, (name, price, desc) in SHOP_ITEMS.items():
+            options.append(discord.SelectOption(label=name, value=item_id, description=f"Цена: {fmt(price)} | {desc[:50]}..."))
+        super().__init__(placeholder="Выберите товар для покупки...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        item_id = self.values[0]
+        name, price, _ = SHOP_ITEMS[item_id]
+        
+        success, msg = await self.cog.store.buy_item(interaction.user.id, item_id)
+        
+        if success:
+            if item_id == "custom_role":
+                await interaction.response.send_modal(CustomRoleModal())
+                return
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+
+class ShopView(ui.View):
+    def __init__(self, cog):
+        super().__init__(timeout=180)
+        self.add_item(ShopSelect(cog))
+
+# ==================== ОСНОВНАЯ ПАНЕЛЬ ====================
 
 class CasinoModal(ui.Modal):
     def __init__(self, title: str, bet_label: str = "Ставка (в монетах)"):
@@ -177,23 +307,29 @@ class CasinoView(ui.View):
         embed.set_footer(text="Code by PAVUK"); await interaction.response.send_message(embed=embed, ephemeral=True)
     @ui.button(label="🎁 Ежедневный", style=discord.ButtonStyle.success, custom_id="casino_daily")
     async def daily(self, interaction: discord.Interaction, button: ui.Button):
-        ok, balance = await self.cog.store.daily(interaction.user.id)
-        msg = f"🎁 Вы получили **{fmt(DAILY_REWARD)}** монет!\nБаланс: **{fmt(balance)}**." if ok else f"⏳ Бонус уже получен. Баланс: **{fmt(balance)}**."
+        ok, balance, reward = await self.cog.store.daily(interaction.user.id)
+        if ok:
+            msg = f"🎁 Вы получили **{fmt(reward)}** монет!\nБаланс: **{fmt(balance)}**."
+        else:
+            msg = f"⏳ Ежедневный бонус уже получен. Баланс: **{fmt(balance)}**."
         await interaction.response.send_message(msg, ephemeral=True)
+    @ui.button(label="🛒 Магазин", style=discord.ButtonStyle.primary, custom_id="casino_shop")
+    async def shop(self, interaction: discord.Interaction, button: ui.Button):
+        balance = await self.cog.store.balance(interaction.user.id)
+        embed = discord.Embed(title="🛒 Магазин казино", description=f"Ваш баланс: **{fmt(balance)}** монет.\nВыберите товар в меню ниже:", color=discord.Color.gold())
+        embed.set_footer(text="Code by PAVUK")
+        await interaction.response.send_message(embed=embed, view=ShopView(self.cog), ephemeral=True)
     @ui.button(label="🏆 Лидеры", style=discord.ButtonStyle.secondary, custom_id="casino_leaders")
     async def leaders(self, interaction: discord.Interaction, button: ui.Button):
         rows = await self.cog.store.leaderboard(10)
-        if not rows:
-            await interaction.response.send_message("Пока нет игроков.", ephemeral=True)
-            return
+        if not rows: await interaction.response.send_message("Пока нет игроков.", ephemeral=True); return
         lines = []
         for i, r in enumerate(rows, 1):
             u = interaction.client.get_user(int(r['user_id']))
             name = u.display_name if u else f"Игрок {r['user_id']}"
             lines.append(f"**{i}.** {discord.utils.escape_markdown(name)} — **{fmt(int(r['balance']))}**")
         embed = discord.Embed(title="🏆 Лидеры казино", description="\n".join(lines), color=discord.Color.gold())
-        embed.set_footer(text="Code by PAVUK")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed.set_footer(text="Code by PAVUK"); await interaction.response.send_message(embed=embed, ephemeral=True)
     @ui.button(label="📜 История", style=discord.ButtonStyle.secondary, custom_id="casino_history")
     async def history(self, interaction: discord.Interaction, button: ui.Button):
         rows = await self.cog.store.history(interaction.user.id)
@@ -209,9 +345,12 @@ class CasinoView(ui.View):
     async def roulette(self, interaction: discord.Interaction, button: ui.Button): await interaction.response.send_modal(RouletteModal())
 
 class Casino(commands.Cog):
-    def __init__(self, bot: commands.Bot): self.bot = bot; self.store = CasinoStore()
+    def __init__(self, bot: commands.Bot): 
+        self.bot = bot
+        self.store = CasinoStore()
 
-async def setup(bot: commands.Bot): await bot.add_cog(Casino(bot))
+async def setup(bot: commands.Bot): 
+    await bot.add_cog(Casino(bot))
 
 async def setup_casino_panel(bot: commands.Bot):
     from config import CASINO_CHANNEL_ID
