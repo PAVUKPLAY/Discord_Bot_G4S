@@ -223,21 +223,47 @@ class CreateEventView(ui.View):
     async def cancel_button(self, interaction: discord.Interaction, button: ui.Button):
         if not has_moderator_role(interaction.user):
             await interaction.response.send_message("❌ Нет прав.", ephemeral=True); return
-        active_events = {k: v for k, v in events.items() if not v.get('is_cancelled', False)}
+            
+        now = datetime.now(MSK)
+        active_events = {}
+        for k, v in events.items():
+            if v.get('is_cancelled', False): continue
+            try:
+                event_dt = datetime.fromisoformat(v['datetime'])
+                if event_dt > now: # Только те, что ещё не начались
+                    active_events[k] = v
+            except: pass
+
         if not active_events:
-            await interaction.response.send_message("Нет активных.", ephemeral=True); return
-        view = ui.View(); view.add_item(EventCancelSelect(active_events))
-        await interaction.response.send_message("Выберите:", view=view, ephemeral=True)
+            await interaction.response.send_message("Нет активных (будущих) мероприятий для отмены.", ephemeral=True)
+            return
+        
+        view = ui.View()
+        view.add_item(EventCancelSelect(active_events))
+        await interaction.response.send_message("Выберите мероприятие для отмены:", view=view, ephemeral=True)
 
     @ui.button(label='🔄 Перенести', style=discord.ButtonStyle.secondary, custom_id='reschedule_event_button')
     async def reschedule_button(self, interaction: discord.Interaction, button: ui.Button):
         if not has_moderator_role(interaction.user):
             await interaction.response.send_message("❌ Нет прав.", ephemeral=True); return
-        active_events = {k: v for k, v in events.items() if not v.get('is_cancelled', False)}
+            
+        now = datetime.now(MSK)
+        active_events = {}
+        for k, v in events.items():
+            if v.get('is_cancelled', False): continue
+            try:
+                event_dt = datetime.fromisoformat(v['datetime'])
+                if event_dt > now: # Только те, что ещё не начались
+                    active_events[k] = v
+            except: pass
+
         if not active_events:
-            await interaction.response.send_message("Нет активных.", ephemeral=True); return
-        view = ui.View(); view.add_item(EventRescheduleSelect(active_events))
-        await interaction.response.send_message("Выберите:", view=view, ephemeral=True)
+            await interaction.response.send_message("Нет активных (будущих) мероприятий для переноса.", ephemeral=True)
+            return
+        
+        view = ui.View()
+        view.add_item(EventRescheduleSelect(active_events))
+        await interaction.response.send_message("Выберите мероприятие для переноса:", view=view, ephemeral=True)
 
 async def setup_event_button(bot):
     if not EVENT_CHANNEL_ID: return
@@ -298,7 +324,12 @@ async def reminder_task(bot):
             except: continue
             delta = (event_dt - now).total_seconds()
             ts = int(event_dt.timestamp())
-            if delta < -2 * 3600: continue
+            
+            # Если мероприятие прошло более 2 часов назад, удаляем его из базы
+            if delta < -2 * 3600:
+                del events[eid]
+                save_events(events)
+                continue
 
             if not event.get('reminded_24h', False) and 1 * 3600 < delta <= 24 * 3600:
                 await send_reminder(bot, event, title="📅 Напоминание о смежке!", description=f"**{event['title']}** начнется <t:{ts}:R>.\nНе забудьте подтвердить участие!", color=discord.Color.orange())
@@ -309,6 +340,7 @@ async def reminder_task(bot):
             elif not event.get('reminded_start', False) and -2 * 3600 <= delta <= 5 * 60:
                 await send_reminder(bot, event, title="🚀 Мероприятие началось!", description=f"Мероприятие **{event['title']}** **уже началось**!\nПрисоединяйтесь к каналу!", color=discord.Color.green())
                 event['reminded_start'] = True; save_events(events)
+                
         await asyncio.sleep(30)
 
 async def on_reaction_add(reaction, user):
