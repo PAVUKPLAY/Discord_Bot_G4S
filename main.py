@@ -15,9 +15,11 @@ import casino
 import logging_manager
 import activity_manager
 
-# ==================== УМНЫЙ ФОРМАТТЕР ЛОГОВ ====================
-class EmojiFormatter(logging.Formatter):
-    # Регулярка проверяет, начинается ли строка с эмодзи
+# ==================== УМНЫЙ И ЧИСТЫЙ ФОРМАТТЕР ЛОГОВ ====================
+class CleanEmojiFormatter(logging.Formatter):
+    # Регулярка для удаления ANSI-цветов Discord
+    ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    # Регулярка проверки на наличие эмодзи в начале
     EMOJI_CHECK = re.compile(r'^[\U0001F000-\U0001FFFF\u2600-\u27BF\u2190-\u21FF\u2300-\u23FF]')
     
     LEVEL_EMOJI = {
@@ -29,37 +31,44 @@ class EmojiFormatter(logging.Formatter):
     }
     
     def format(self, record):
-        message = record.getMessage()
-        # Если сообщение уже начинается с эмодзи, не добавляем свой
+        # Очищаем сообщение от ANSI-кодов
+        message = self.ANSI_ESCAPE.sub('', record.getMessage())
+        
+        # Добавляем эмодзи, если его нет
         if not self.EMOJI_CHECK.match(message.strip()):
             emoji = self.LEVEL_EMOJI.get(record.levelno, "•")
             message = f"{emoji} {message}"
         
         timestamp = self.formatTime(record, self.datefmt)
-        return f"{timestamp} {message}"
+        return f"[{timestamp}] {message}"
 
-# Настраиваем корневой логгер
+# 1. Убираем стандартные обработчики Discord (отключаем их цвета)
+for logger_name in ['discord', 'discord.voice_state', 'discord.gateway', 'discord.client', 'discord.http', 'httpx', 'faster_whisper', 'edge_tts']:
+    lg = logging.getLogger(logger_name)
+    lg.handlers = []
+    lg.propagate = True
+
+# 2. Настраиваем корневой логгер
 handler = logging.StreamHandler()
-handler.setFormatter(EmojiFormatter(fmt='%(message)s', datefmt='%d.%m.%Y %H:%M'))
+handler.setFormatter(CleanEmojiFormatter(datefmt='%d.%m.%Y %H:%M'))
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
-# Очищаем старые обработчики и ставим наш
 for h in root_logger.handlers[:]:
     root_logger.removeHandler(h)
 root_logger.addHandler(handler)
 
-# Отключаем спам от технических библиотек
+# 3. Заглушаем технический мусор
 logging.getLogger('discord').setLevel(logging.WARNING)
-logging.getLogger('discord.http').setLevel(logging.WARNING)
+logging.getLogger('discord.voice_state').setLevel(logging.WARNING) # Убираем "Connecting to voice..."
 logging.getLogger('discord.gateway').setLevel(logging.WARNING)
-logging.getLogger('discord.client').setLevel(logging.WARNING)
+logging.getLogger('discord.http').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('faster_whisper').setLevel(logging.WARNING)
 logging.getLogger('edge_tts').setLevel(logging.WARNING)
 
 logger = logging.getLogger("G4S")
-# ================================================================
+# =======================================================================
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -74,7 +83,7 @@ bot.remove_command('help')
 monitor_message = None
 radio_manager = RadioManager()
 
-# ==================== ЗАГРУЗКА РАСШИРЕНИЙ (ДО ЗАПУСКА) ====================
+# ==================== ЗАГРУЗКА РАСШИРЕНИЙ ====================
 async def setup_hook():
     try:
         await bot.load_extension("casino")
@@ -90,7 +99,7 @@ async def setup_hook():
 
 bot.setup_hook = setup_hook
 
-# ==================== ГЛОБАЛЬНЫЕ СЛУШАТЕЛИ (ЛОГИРОВАНИЕ) ====================
+# ==================== ГЛОБАЛЬНЫЕ СЛУШАТЕЛИ ====================
 @bot.event
 async def on_member_ban(guild, user):
     await logging_manager.on_member_ban(guild, user, bot)
@@ -117,12 +126,12 @@ async def slash_help(interaction: discord.Interaction):
         color=discord.Color.blue()
     )
     embed.add_field(name="🤖 AI-чат", value="Напишите **`Ученый <вопрос>`** или упомяните меня. Очистка: **`/очистить`**.", inline=False)
-    embed.add_field(name="🛡️ Мониторинг сервера Arma 3", value="Каждую минуту я обновляю информацию о сервере в канале мониторинга.", inline=False)
+    embed.add_field(name="🛡️ Мониторинг сервера Arma 3", value="Каждую минуту я обновляю информацию о сервере.", inline=False)
     embed.add_field(name="📻 Радио", value="В канале радио есть панель. Смена станции требует голосования.", inline=False)
     embed.add_field(name="🎰 Казино", value="Специальный канал с кнопками для игр.", inline=False)
     embed.add_field(name="📈 Активность", value="Канал со статистикой онлайна и сообщений.", inline=False)
-    embed.add_field(name="📋 Заявки в отряд", value="При вступлении на сервер вы получите роль Гость и приветствие.", inline=False)
-    embed.add_field(name="📅 События", value="Модераторы могут создавать смежки через кнопку в канале событий.", inline=False)
+    embed.add_field(name="📋 Заявки в отряд", value="При вступлении вы получите роль Гость и приветствие.", inline=False)
+    embed.add_field(name="📅 События", value="Модераторы могут создавать смежки через кнопку.", inline=False)
     embed.set_footer(text="G4S Командование • v1.0 | Code by PAVUK")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
