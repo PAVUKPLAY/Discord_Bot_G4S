@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands, tasks
 import logging
 import asyncio
+import re
 from config import DISCORD_TOKEN
 from arma_monitor import update_status, cleanup_monitor
 from ai_chat import on_ai_message, clear_history
@@ -14,18 +15,45 @@ import casino
 import logging_manager
 import activity_manager
 
-# ==================== НАСТРОЙКА КРАСИВЫХ ЛОГОВ ====================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(message)s',
-    datefmt='%d.%m.%Y %H:%M',
-    handlers=[logging.StreamHandler()]
-)
+# ==================== УМНЫЙ ФОРМАТТЕР ЛОГОВ ====================
+class EmojiFormatter(logging.Formatter):
+    # Регулярка проверяет, начинается ли строка с эмодзи
+    EMOJI_CHECK = re.compile(r'^[\U0001F000-\U0001FFFF\u2600-\u27BF\u2190-\u21FF\u2300-\u23FF]')
+    
+    LEVEL_EMOJI = {
+        logging.DEBUG: "🔍",
+        logging.INFO: "✅",
+        logging.WARNING: "⚠️",
+        logging.ERROR: "❌",
+        logging.CRITICAL: "🔥"
+    }
+    
+    def format(self, record):
+        message = record.getMessage()
+        # Если сообщение уже начинается с эмодзи, не добавляем свой
+        if not self.EMOJI_CHECK.match(message.strip()):
+            emoji = self.LEVEL_EMOJI.get(record.levelno, "•")
+            message = f"{emoji} {message}"
+        
+        timestamp = self.formatTime(record, self.datefmt)
+        return f"{timestamp} {message}"
+
+# Настраиваем корневой логгер
+handler = logging.StreamHandler()
+handler.setFormatter(EmojiFormatter(fmt='%(message)s', datefmt='%d.%m.%Y %H:%M'))
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+# Очищаем старые обработчики и ставим наш
+for h in root_logger.handlers[:]:
+    root_logger.removeHandler(h)
+root_logger.addHandler(handler)
 
 # Отключаем спам от технических библиотек
 logging.getLogger('discord').setLevel(logging.WARNING)
 logging.getLogger('discord.http').setLevel(logging.WARNING)
 logging.getLogger('discord.gateway').setLevel(logging.WARNING)
+logging.getLogger('discord.client').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('faster_whisper').setLevel(logging.WARNING)
 logging.getLogger('edge_tts').setLevel(logging.WARNING)
@@ -50,15 +78,15 @@ radio_manager = RadioManager()
 async def setup_hook():
     try:
         await bot.load_extension("casino")
-        logger.info("✅ Модуль казино загружен.")
+        logger.info("Модуль казино загружен.")
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки модуля казино: {e}")
+        logger.error(f"Ошибка загрузки модуля казино: {e}")
         
     try:
         await bot.load_extension("activity_manager")
-        logger.info("✅ Модуль активности загружен.")
+        logger.info("Модуль активности загружен.")
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки модуля активности: {e}")
+        logger.error(f"Ошибка загрузки модуля активности: {e}")
 
 bot.setup_hook = setup_hook
 
@@ -115,13 +143,13 @@ async def on_member_join(member):
 @bot.event
 async def on_ready():
     global monitor_message
-    logger.info(f"🚀 Бот {bot.user.name} успешно запущен и готов к работе!")
+    logger.info(f"Бот {bot.user.name} успешно запущен и готов к работе!")
     
     try:
         await bot.tree.sync()
-        logger.info("🔄 Слеш-команды синхронизированы")
+        logger.info("Слеш-команды синхронизированы")
     except Exception as e:
-        logger.error(f"❌ Ошибка синхронизации слеш-команд: {e}")
+        logger.error(f"Ошибка синхронизации слеш-команд: {e}")
 
     bot.add_listener(event_manager.on_reaction_add, 'on_reaction_add')
     bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
