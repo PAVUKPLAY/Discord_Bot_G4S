@@ -1,3 +1,12 @@
+import sys
+import os
+
+# ==================== ОЧИСТКА ЭКРАНА ПРИ СТАРТЕ ====================
+# Отправляем ANSI-код очистки экрана и возврата курсора в начало
+sys.stdout.write('\033[2J\033[H')
+sys.stdout.flush()
+# ==================================================================
+
 import discord
 from discord.ext import commands, tasks
 import logging
@@ -17,9 +26,7 @@ import activity_manager
 
 # ==================== УМНЫЙ И ЧИСТЫЙ ФОРМАТТЕР ЛОГОВ ====================
 class CleanEmojiFormatter(logging.Formatter):
-    # Регулярка для удаления ANSI-цветов Discord
     ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    # Регулярка проверки на наличие эмодзи в начале
     EMOJI_CHECK = re.compile(r'^[\U0001F000-\U0001FFFF\u2600-\u27BF\u2190-\u21FF\u2300-\u23FF]')
     
     LEVEL_EMOJI = {
@@ -31,24 +38,18 @@ class CleanEmojiFormatter(logging.Formatter):
     }
     
     def format(self, record):
-        # Очищаем сообщение от ANSI-кодов
         message = self.ANSI_ESCAPE.sub('', record.getMessage())
-        
-        # Добавляем эмодзи, если его нет
         if not self.EMOJI_CHECK.match(message.strip()):
             emoji = self.LEVEL_EMOJI.get(record.levelno, "•")
             message = f"{emoji} {message}"
-        
         timestamp = self.formatTime(record, self.datefmt)
         return f"[{timestamp}] {message}"
 
-# 1. Убираем стандартные обработчики Discord (отключаем их цвета)
 for logger_name in ['discord', 'discord.voice_state', 'discord.gateway', 'discord.client', 'discord.http', 'httpx', 'faster_whisper', 'edge_tts']:
     lg = logging.getLogger(logger_name)
     lg.handlers = []
     lg.propagate = True
 
-# 2. Настраиваем корневой логгер
 handler = logging.StreamHandler()
 handler.setFormatter(CleanEmojiFormatter(datefmt='%d.%m.%Y %H:%M'))
 
@@ -58,9 +59,8 @@ for h in root_logger.handlers[:]:
     root_logger.removeHandler(h)
 root_logger.addHandler(handler)
 
-# 3. Заглушаем технический мусор
 logging.getLogger('discord').setLevel(logging.WARNING)
-logging.getLogger('discord.voice_state').setLevel(logging.WARNING) # Убираем "Connecting to voice..."
+logging.getLogger('discord.voice_state').setLevel(logging.WARNING)
 logging.getLogger('discord.gateway').setLevel(logging.WARNING)
 logging.getLogger('discord.http').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.WARNING)
@@ -83,7 +83,6 @@ bot.remove_command('help')
 monitor_message = None
 radio_manager = RadioManager()
 
-# ==================== ЗАГРУЗКА РАСШИРЕНИЙ ====================
 async def setup_hook():
     try:
         await bot.load_extension("casino")
@@ -99,7 +98,6 @@ async def setup_hook():
 
 bot.setup_hook = setup_hook
 
-# ==================== ГЛОБАЛЬНЫЕ СЛУШАТЕЛИ ====================
 @bot.event
 async def on_member_ban(guild, user):
     await logging_manager.on_member_ban(guild, user, bot)
@@ -115,8 +113,6 @@ async def on_member_update(before, after):
 @bot.event
 async def on_voice_state_update(member, before, after):
     await logging_manager.on_voice_state_update(member, before, after, bot)
-
-# ==================== СЛЕШ-КОМАНДЫ ====================
 
 @bot.tree.command(name="help", description="Показать справку по боту")
 async def slash_help(interaction: discord.Interaction):
@@ -142,8 +138,6 @@ async def slash_clear_history(interaction: discord.Interaction):
         await interaction.response.send_message("🧹 Ваша история диалога с AI очищена.", ephemeral=True)
     else:
         await interaction.response.send_message("📭 У вас не было сохранённой истории.", ephemeral=True)
-
-# ==================== СОБЫТИЯ И ЗАДАЧИ ====================
 
 @bot.event
 async def on_member_join(member):
