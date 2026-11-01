@@ -20,10 +20,10 @@ FFMPEG_OPTIONS = {
 AUDIO_EXTENSIONS = (".mp3", ".aac", ".ogg", ".m3u8", ".m3u", ".pls", ".opus", ".flac", ".wav", ".mp4", ".webm")
 STREAM_KEYWORDS = ("stream", "live", "radio", "listen", "air", "broadcast", "play", "icecast", "shoutcast", "audio")
 
-MAX_RETRIES = 5
+MAX_RETRIES = 3
 RETRY_DELAY = 10
 
-FALLBACK_STATION = "Radio Record" # Резервная станция на случай, если дефолтная мертва
+FALLBACK_STATION = "Radio Record"
 
 def _classify_url(url: str):
     try: parsed = urlparse(url)
@@ -94,6 +94,15 @@ class RadioManager:
         except Exception:
             return []
 
+    async def resolve_station(self, query: str):
+        query = query.strip()
+        if query.startswith(("http://", "https://")):
+            return (query, query)
+        st = await self.search_stations(query)
+        if st:
+            return (st[0]["name"], st[0]["url"])
+        return None
+
     async def connect_voice(self, channel: discord.VoiceChannel):
         guild_id = channel.guild.id
         vc = self.voice_clients.get(guild_id)
@@ -134,9 +143,36 @@ class RadioManager:
         if guild_id in self.stopping:
             self.stopping.discard(guild_id)
             return
+        logger.warning(f"Поток '{name}' прервался: {error}. Пробую перезапустить...")
+        if (RADIO_DEFAULT_STATION and url == RADIO_DEFAULT_STATION) or name == RADIO_DEFAULT_STATION:
+            logger.warning("Станция по умолчанию недоступна. Включаю резервную.")
+            if self.bot:
+                asyncio.run_coroutine_threadsafe(self._play_fallback(guild_id), self.bot.loop)
+            return
         self.current_stations.pop(guild_id, None)
         if self.bot:
             asyncio.run_coroutine_threadsafe(self._retry_stream(guild_id, name, url), self.bot.loop)
+
+    async def _play_fallback(self, guild_id: int) -> bool:
+        logger.info(f"Запуск резервной станции: {FALLBACK_STATION}")
+        stations = await self.search_stations(FALLBACK_STATION)
+        if stations:
+            name = stations[0]["name"]
+            url = stations[0]["url"]
+            self.current_stations[guild_id] = name
+            self.current_urls[guild_id] = url
+            vc = self.voice_clients.get(guild_id)
+            if vc and vc.is_connected():
+                try:
+                    source = self._create_source(url, guild_id)
+                    vc.play(source, after=lambda e: self._after_play(e, guild_id, name, url))
+                    await self.update_control_panel(guild_id)
+                    await self._notify(f"⚠️ Станция по умолчанию была недоступна. Включена резервная: **{name}**")
+                    return True
+                except Exception as e:
+                    logger.error(f"Ошибка запуска резервной станции: {e}")
+        await self._notify("❌ Все радиостанции недоступны.")
+        return False
 
     async def _retry_stream(self, guild_id: int, name: str, url: str):
         if guild_id in self.retry_tasks and not self.retry_tasks[guild_id].done(): return
@@ -155,12 +191,9 @@ class RadioManager:
                 vc = self.voice_clients.get(guild_id)
                 if not vc or not vc.is_connected(): continue
             
-            # Если ссылка отвалилась (404), пробуем найти новый рабочий URL по имени станции
             if attempt >= 2:
-                logger.info(f"Попытка {attempt}: ищу новый URL для станции '{name}'")
                 stations = await self.search_stations(name)
-                if stations:
-                    url = stations[0]["url"]
+                if stations: url = stations[0]["url"]
 
             try:
                 source = self._create_source(url, guild_id)
@@ -170,9 +203,10 @@ class RadioManager:
                 await self.update_control_panel(guild_id)
                 await self._notify(f"🔄 Радио «{name}» перезапущено.")
                 return
-            except Exception: 
-                pass
-        await self._notify(f"⚠️ Не удалось восстановить поток «{name}».")
+            except Exception: pass
+            
+        await self._notify(f"⚠️ Не удалось восстановить поток «{name}». Включаю резервную.")
+        await self._play_fallback(guild_id)
         self.retry_count[guild_id] = 0
 
     async def _reconnect_voice(self, guild_id: int):
@@ -222,22 +256,16 @@ class RadioManager:
         if not vc: return
         guild_id = channel.guild.id
 
-        # Пытаемся запустить дефолтную станцию
-        started = False
         if RADIO_DEFAULT_STATION:
-            stations = await self.search_stations(RADIO_DEFAULT_STATION)
-            if stations:
-                started = await self.play_url(guild_id, stations[0]["url"], stations[0]["name"], notify_channel_id=RADIO_TEXT_CHANNEL_ID)
-        
-        # Если не удалось запустить (мертвая ссылка), включаем резервную
-        if not started:
-            logger.warning(f"Станция по умолчанию не запустилась. Включаю резервную: {FALLBACK_STATION}")
-            fallback_stations = await self.search_stations(FALLBACK_STATION)
-            if fallback_stations:
-                await self.play_url(guild_id, fallback_stations[0]["url"], fallback_stations[0]["name"], notify_channel_id=RADIO_TEXT_CHANNEL_ID)
-                await self._notify(f"⚠️ Станция по умолчанию была недоступна. Включена резервная: **{FALLBACK_STATION}**")
+            resolved = await self.resolve_station(RADIO_DEFAULT_STATION)
+            if resolved:
+                name, url = resolved
+                await self.play_url(guild_id, url, name, notify_channel_id=RADIO_TEXT_CHANNEL_ID)
             else:
-                await self._notify(f"❌ Все радиостанции недоступны.")
+                logger.warning(f"Станция по умолчанию '{RADIO_DEFAULT_STATION}' не найдена. Включаю резервную.")
+                await self._play_fallback(guild_id)
+        else:
+            await self._play_fallback(guild_id)
 
         if RADIO_TEXT_CHANNEL_ID: await self.ensure_control_panel(bot, RADIO_TEXT_CHANNEL_ID)
 
@@ -469,7 +497,20 @@ class RadioControlView(ui.View):
         if len(vc_members) <= 1:
             await interaction.response.send_modal(ChangeStationModal(self.radio_manager))
             return
+
+        # === НОВАЯ ПРОВЕРКА НА ПРОПУСК ГОЛОСОВАНИЯ ===
+        casino_cog = interaction.client.get_cog("Casino")
+        if casino_cog:
+            inventory = await casino_cog.store.get_inventory(interaction.user.id)
+            if inventory.get("radio_skip", 0) > 0:
+                # Тратим билет
+                success = await casino_cog.store.use_item(interaction.user.id, "radio_skip")
+                if success:
+                    await interaction.response.send_message("🎫 Вы использовали пропуск смены радио! Голосование пропущено.", ephemeral=True)
+                    await interaction.user.send("Выберите станцию:", view=OpenChangeModalView(self.radio_manager))
+                    return
             
+        # Если пропуска нет, запускаем голосование
         view = RadioChangeVoteView(self.radio_manager, interaction, vc.channel)
         mentions = " ".join([m.mention for m in vc_members])
         embed = discord.Embed(
