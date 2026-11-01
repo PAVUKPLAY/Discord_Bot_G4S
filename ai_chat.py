@@ -6,10 +6,8 @@ import logging
 import json
 import os
 import tempfile
-import subprocess
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import edge_tts
 import discord
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL
 from toggle_manager import get_status
@@ -134,84 +132,6 @@ async def send_long_answer(destination, text):
         if i < total - 1: await asyncio.sleep(0.5)
     return sent_messages
 
-# ==================== ОЧИСТКА ТЕКСТА ДЛЯ TTS ====================
-def clean_text_for_tts(text: str) -> str:
-    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
-    text = re.sub(r'http\S+', '', text)
-    text = re.sub(r'[*_`~#«»—–]', '', text)
-    text = re.sub(r'[^а-яА-ЯёЁa-zA-Z0-9\s.,!?;:()]', '', text)
-    return text.strip()
-
-# ==================== ОТПРАВКА ГОЛОСОВОГО СООБЩЕНИЯ ====================
-async def send_voice_answer(destination, text):
-    clean_text = clean_text_for_tts(text)
-    
-    if not clean_text:
-        await send_long_answer(destination, text)
-        return
-
-    if len(clean_text) > 400:
-        clean_text = clean_text[:400] + "... Короче, я устал говорить."
-
-    temp_mp3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-    temp_ogg = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg").name
-
-    for attempt in range(3):
-        try:
-            # 1. Генерация TTS
-            communicate = edge_tts.Communicate(clean_text, voice="ru-RU-SvetlanaNeural")
-            await communicate.save(temp_mp3)
-
-            # 2. Конвертация в OGG/Opus
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", temp_mp3, "-c:a", "libopus", "-b:a", "48k", temp_ogg],
-                check=True, capture_output=True
-            )
-
-            # 3. Получение длительности для корректного отображения плеера
-            try:
-                from mutagen.oggopus import OggOpus
-                info = OggOpus(temp_ogg)
-                duration_secs = info.info.length
-            except Exception:
-                duration_secs = max(1.0, os.path.getsize(temp_ogg) / 2000.0)
-
-            # 4. Отправка как голосового сообщения
-            with open(temp_ogg, "rb") as f:
-                file = discord.File(
-                    f, 
-                    filename="voice-message.ogg",
-                    duration=duration_secs,
-                    waveform=bytes([128] * 256)  # Прямая волна
-                )
-                
-                # Отправляем с флагом голосового сообщения
-                if hasattr(destination, 'reply'):
-                    await destination.reply(file=file, flags=discord.MessageFlags(is_voice_message=True))
-                else:
-                    await destination.send(file=file, flags=discord.MessageFlags(is_voice_message=True))
-            return
-            
-        except Exception as e:
-            logger.warning(f"Попытка {attempt+1} генерации голосового ответа не удалась: {e}")
-            await asyncio.sleep(2)
-
-    # Если все попытки провалились — отправляем как обычный файл
-    logger.error("Ошибка генерации голосового ответа после 3 попыток. Отправляю файлом.")
-    with open(temp_ogg, "rb") as f:
-        file = discord.File(f, filename="voice-message.ogg")
-        if hasattr(destination, 'reply'):
-            await destination.reply(file=file)
-        else:
-            await destination.send(file=file)
-        
-    await destination.channel.send("*(Голосовой ответ не удался)*")
-    await send_long_answer(destination, text)
-
-    if os.path.exists(temp_mp3): os.remove(temp_mp3)
-    if os.path.exists(temp_ogg): os.remove(temp_ogg)
-# =============================================================
-
 async def transcribe_audio(attachment) -> str:
     if not AUDIO_SUPPORT:
         return "⚠️ Библиотеки для распознавания голоса не установлены."
@@ -327,14 +247,15 @@ async def on_ai_message(message, bot):
 
     if ucheniy_match or is_mentioned:
         question = ""
-        is_voice_input = bool(audio_attachments)
-
+        
+        # Определяем текстовый запрос из сообщения
         if ucheniy_match: question = content[ucheniy_match.end():].strip()
         elif is_mentioned:
             mention_pattern = re.compile(r'<@!?%s>' % bot.user.id)
             question = mention_pattern.sub('', content).strip()
             if not question and not image_attachments and not audio_attachments: return
 
+        # Если есть голосовое, распознаем его и добавляем к вопросу
         if audio_attachments:
             transcription = await transcribe_audio(audio_attachments[0])
             if transcription.startswith("⚠️"):
@@ -395,11 +316,9 @@ async def on_ai_message(message, bot):
                 conversations[conv_id] = history
                 save_ai_memory(conversations)
 
-                if is_voice_input:
-                    await send_voice_answer(message, answer)
-                else:
-                    sent_messages = await send_long_answer(message, answer)
-                    for msg in sent_messages: msg_to_conv[msg.id] = conv_id
+                # ВСЕГДА ОТВЕЧАЕМ ТЕКСТОМ
+                sent_messages = await send_long_answer(message, answer)
+                for msg in sent_messages: msg_to_conv[msg.id] = conv_id
 
                 msg_to_conv[message.id] = conv_id
                 if len(msg_to_conv) > 5000: msg_to_conv.clear()
