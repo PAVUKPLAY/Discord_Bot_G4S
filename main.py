@@ -2,7 +2,6 @@ import sys
 import os
 
 # ==================== ОЧИСТКА ЭКРАНА ПРИ СТАРТЕ ====================
-# Отправляем ANSI-код очистки экрана и возврата курсора в начало
 sys.stdout.write('\033[2J\033[H')
 sys.stdout.flush()
 # ==================================================================
@@ -45,10 +44,12 @@ class CleanEmojiFormatter(logging.Formatter):
         timestamp = self.formatTime(record, self.datefmt)
         return f"[{timestamp}] {message}"
 
-for logger_name in ['discord', 'discord.voice_state', 'discord.gateway', 'discord.client', 'discord.http', 'httpx', 'faster_whisper', 'edge_tts']:
-    lg = logging.getLogger(logger_name)
+# Полностью глушим системные логгеры Discord и запросов
+for name in ['discord', 'discord.player', 'discord.voice_state', 'discord.gateway', 'discord.client', 'discord.http', 'httpx', 'faster_whisper', 'edge_tts']:
+    lg = logging.getLogger(name)
     lg.handlers = []
-    lg.propagate = True
+    lg.propagate = False
+    lg.setLevel(logging.CRITICAL) # Показываем только критические ошибки
 
 handler = logging.StreamHandler()
 handler.setFormatter(CleanEmojiFormatter(datefmt='%d.%m.%Y %H:%M'))
@@ -58,14 +59,6 @@ root_logger.setLevel(logging.INFO)
 for h in root_logger.handlers[:]:
     root_logger.removeHandler(h)
 root_logger.addHandler(handler)
-
-logging.getLogger('discord').setLevel(logging.WARNING)
-logging.getLogger('discord.voice_state').setLevel(logging.WARNING)
-logging.getLogger('discord.gateway').setLevel(logging.WARNING)
-logging.getLogger('discord.http').setLevel(logging.WARNING)
-logging.getLogger('httpx').setLevel(logging.WARNING)
-logging.getLogger('faster_whisper').setLevel(logging.WARNING)
-logging.getLogger('edge_tts').setLevel(logging.WARNING)
 
 logger = logging.getLogger("G4S")
 # =======================================================================
