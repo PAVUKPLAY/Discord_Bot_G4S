@@ -455,7 +455,10 @@ class StationSelect(ui.Select):
             await interaction.followup.send(f"📻 Воспроизводится: **{station['name']}**", ephemeral=True)
             await self.radio_manager.update_control_panel(interaction.guild_id)
             self.disabled = True
-            await interaction.message.edit(view=None)
+            try:
+                await interaction.message.edit(view=None)
+            except discord.NotFound:
+                pass  # Сообщение уже удалено или устарело — игнорируем
         else:
             await interaction.followup.send("❌ Не удалось запустить поток.", ephemeral=True)
 
@@ -498,19 +501,17 @@ class RadioControlView(ui.View):
             await interaction.response.send_modal(ChangeStationModal(self.radio_manager))
             return
 
-        # === НОВАЯ ПРОВЕРКА НА ПРОПУСК ГОЛОСОВАНИЯ ===
+        # === ПРОВЕРКА НА ПРОПУСК ГОЛОСОВАНИЯ ===
         casino_cog = interaction.client.get_cog("Casino")
         if casino_cog:
             inventory = await casino_cog.store.get_inventory(interaction.user.id)
             if inventory.get("radio_skip", 0) > 0:
-                # Тратим билет
                 success = await casino_cog.store.use_item(interaction.user.id, "radio_skip")
                 if success:
                     await interaction.response.send_message("🎫 Вы использовали пропуск смены радио! Голосование пропущено.", ephemeral=True)
                     await interaction.user.send("Выберите станцию:", view=OpenChangeModalView(self.radio_manager))
                     return
             
-        # Если пропуска нет, запускаем голосование
         view = RadioChangeVoteView(self.radio_manager, interaction, vc.channel)
         mentions = " ".join([m.mention for m in vc_members])
         embed = discord.Embed(
