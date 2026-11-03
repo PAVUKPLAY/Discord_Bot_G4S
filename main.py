@@ -1,11 +1,3 @@
-import sys
-import os
-
-# ==================== ОЧИСТКА ЭКРАНА ПРИ СТАРТЕ ====================
-sys.stdout.write('\033[2J\033[H')
-sys.stdout.flush()
-# ==================================================================
-
 import discord
 from discord.ext import commands, tasks
 import logging
