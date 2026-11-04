@@ -2,12 +2,14 @@ import asyncio
 import random
 import sqlite3
 import os
+import time
 import logging
 from pathlib import Path
 import discord
-from discord import ui
+from discord import ui, app_commands
 from discord.ext import commands
 from discord.errors import HTTPException
+from utils import has_moderator_role
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,6 @@ MAX_BET = 100_000
 SLOT_SYMBOLS = ["🍒", "🍋", "🍇", "🍉", "⭐", "💎"]
 SLOT_WEIGHTS = [30, 25, 20, 15, 8, 2]
 
-# Товары в магазине: (id, название, цена, описание)
 SHOP_ITEMS = {
     "radio_skip": ("🎫 Пропуск смены радио", 5000, "Позволяет сменить станцию в войсе без голосования (одноразовый)."),
     "daily_boost": ("💎 Бустер ежедневного бонуса", 10000, "Навсегда увеличивает ваш ежедневный бонус на 100 монет."),
@@ -54,7 +55,10 @@ class CasinoStore:
             con.execute("""CREATE TABLE IF NOT EXISTS casino_history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, game TEXT NOT NULL, bet INTEGER NOT NULL, delta INTEGER NOT NULL, balance_after INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
             con.execute("""CREATE TABLE IF NOT EXISTS casino_inventory (user_id INTEGER NOT NULL, item_id TEXT NOT NULL, amount INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (user_id, item_id))""")
             
-            # Миграция: добавляем колонку для бустера, если её нет
+            # Таблицы для промокодов
+            con.execute("""CREATE TABLE IF NOT EXISTS promo_codes (code TEXT PRIMARY KEY, amount INTEGER NOT NULL, max_uses INTEGER DEFAULT 0, current_uses INTEGER DEFAULT 0, expires_at INTEGER DEFAULT 0)""")
+            con.execute("""CREATE TABLE IF NOT EXISTS promo_usages (code TEXT NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (code, user_id))""")
+            
             try:
                 con.execute("ALTER TABLE casino_users ADD COLUMN daily_boost INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
@@ -74,7 +78,7 @@ class CasinoStore:
             with self._connect() as con:
                 self._ensure_user(con, user_id)
                 row = con.execute("SELECT balance, daily_claimed, daily_boost FROM casino_users WHERE user_id=?", (user_id,)).fetchone()
-                now_day = int(__import__("time").time() // 86400)
+                now_day = int(time.time() // 86400)
                 if int(row["daily_claimed"]) >= now_day: 
                     return False, int(row["balance"]), 0
                 
@@ -110,34 +114,23 @@ class CasinoStore:
             with self._connect() as con:
                 return con.execute("SELECT game, bet, delta, balance_after, created_at FROM casino_history WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit)).fetchall()
 
-    # === НОВЫЕ МЕТОДЫ ДЛЯ МАГАЗИНА ===
     async def buy_item(self, user_id: int, item_id: str) -> tuple[bool, str]:
         if item_id not in SHOP_ITEMS: return False, "Товар не найден."
-        
         name, price, _ = SHOP_ITEMS[item_id]
-        
         async with self.lock:
             with self._connect() as con:
                 self._ensure_user(con, user_id)
                 balance = int(con.execute("SELECT balance FROM casino_users WHERE user_id=?", (user_id,)).fetchone()["balance"])
-                
                 if balance < price:
                     return False, f"❌ Недостаточно монет. Нужно {fmt(price)}, у вас {fmt(balance)}."
                 
-                # Списываем деньги
                 con.execute("UPDATE casino_users SET balance = balance - ? WHERE user_id=?", (price, user_id))
                 
-                # Выдаем товар
                 if item_id == "daily_boost":
                     con.execute("UPDATE casino_users SET daily_boost = daily_boost + 1 WHERE user_id=?", (user_id,))
                 else:
-                    # Для остальных товаров добавляем в инвентарь
-                    con.execute("""
-                        INSERT INTO casino_inventory (user_id, item_id, amount) VALUES (?, ?, 1)
-                        ON CONFLICT(user_id, item_id) DO UPDATE SET amount = amount + 1
-                    """, (user_id, item_id))
+                    con.execute("INSERT INTO casino_inventory (user_id, item_id, amount) VALUES (?, ?, 1) ON CONFLICT(user_id, item_id) DO UPDATE SET amount = amount + 1", (user_id, item_id))
                 
-                # Записываем в историю
                 con.execute("INSERT INTO casino_history(user_id, game, bet, delta, balance_after) VALUES (?, 'Покупка в магазине', 0, ?, ?)", (user_id, -price, balance - price))
                 return True, f"✅ Вы успешно купили **{name}** за {fmt(price)} монет!"
 
@@ -156,7 +149,69 @@ class CasinoStore:
                     return True
                 return False
 
+    # === ПРОМОКОДЫ ===
+    async def create_promo(self, code: str, amount: int, max_uses: int, hours: float) -> tuple[bool, str]:
+        code = code.strip().upper()
+        expires_at = int(time.time() + (hours * 3600)) if hours > 0 else 0
+        async with self.lock:
+            with self._connect() as con:
+                try:
+                    con.execute(
+                        "INSERT INTO promo_codes (code, amount, max_uses, expires_at) VALUES (?, ?, ?, ?)",
+                        (code, amount, max_uses, expires_at)
+                    )
+                    return True, f"✅ Промокод **{code}** на {fmt(amount)} монет успешно создан!"
+                except sqlite3.IntegrityError:
+                    return False, f"❌ Промокод **{code}** уже существует."
+
+    async def activate_promo(self, code: str, user_id: int) -> tuple[bool, str]:
+        code = code.strip().upper()
+        now = int(time.time())
+        async with self.lock:
+            with self._connect() as con:
+                row = con.execute("SELECT amount, max_uses, current_uses, expires_at FROM promo_codes WHERE code=?", (code,)).fetchone()
+                if not row:
+                    return False, "❌ Промокод не найден."
+                
+                # Проверка на время
+                if row["expires_at"] > 0 and now > row["expires_at"]:
+                    return False, "❌ Срок действия промокода истек."
+                
+                # Проверка на лимит активаций
+                if row["max_uses"] > 0 and row["current_uses"] >= row["max_uses"]:
+                    return False, "❌ Лимит активаций этого промокода исчерпан."
+                
+                # Проверка, активировал ли уже этот юзер
+                usage = con.execute("SELECT 1 FROM promo_usages WHERE code=? AND user_id=?", (code, user_id)).fetchone()
+                if usage:
+                    return False, "❌ Вы уже активировали этот промокод."
+                
+                # Выдача
+                con.execute("UPDATE promo_codes SET current_uses = current_uses + 1 WHERE code=?", (code,))
+                con.execute("INSERT INTO promo_usages (code, user_id) VALUES (?, ?)", (code, user_id))
+                
+                self._ensure_user(con, user_id)
+                con.execute("UPDATE casino_users SET balance = balance + ? WHERE user_id=?", (row["amount"], user_id))
+                
+                new_balance = int(con.execute("SELECT balance FROM casino_users WHERE user_id=?", (user_id,)).fetchone()["balance"])
+                con.execute("INSERT INTO casino_history(user_id, game, bet, delta, balance_after) VALUES (?, 'Промокод', 0, ?, ?)", (user_id, row["amount"], new_balance))
+                
+                return True, f"🎉 Промокод активирован! Вы получили **{fmt(row['amount'])}** монет."
+
+
 # ==================== МОДАЛЬНЫЕ ОКНА ====================
+
+class PromoModal(ui.Modal, title="Активация промокода"):
+    code_input = ui.TextInput(label="Введите промокод", placeholder="Например: G4S2026", required=True, max_length=50)
+
+    def __init__(self, cog):
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        success, message = await self.cog.store.activate_promo(self.input.value, interaction.user.id)
+        await interaction.followup.send(message, ephemeral=True)
 
 class CustomRoleModal(ui.Modal, title="Создание кастомной роли"):
     role_name = ui.TextInput(label="Название роли", placeholder="Например: Кибер-Кот", max_length=32, required=True)
@@ -206,6 +261,7 @@ class ShopView(ui.View):
     def __init__(self, cog):
         super().__init__(timeout=180)
         self.add_item(ShopSelect(cog))
+
 
 # ==================== ОСНОВНАЯ ПАНЕЛЬ ====================
 
@@ -313,6 +369,9 @@ class CasinoView(ui.View):
         else:
             msg = f"⏳ Ежедневный бонус уже получен. Баланс: **{fmt(balance)}**."
         await interaction.response.send_message(msg, ephemeral=True)
+    @ui.button(label="🎟️ Промокод", style=discord.ButtonStyle.success, custom_id="casino_promo")
+    async def promo(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(PromoModal(self.cog))
     @ui.button(label="🛒 Магазин", style=discord.ButtonStyle.primary, custom_id="casino_shop")
     async def shop(self, interaction: discord.Interaction, button: ui.Button):
         balance = await self.cog.store.balance(interaction.user.id)
@@ -344,10 +403,36 @@ class CasinoView(ui.View):
     @ui.button(label="🎡 Рулетка", style=discord.ButtonStyle.primary, custom_id="casino_roulette")
     async def roulette(self, interaction: discord.Interaction, button: ui.Button): await interaction.response.send_modal(RouletteModal())
 
+
 class Casino(commands.Cog):
     def __init__(self, bot: commands.Bot): 
         self.bot = bot
         self.store = CasinoStore()
+
+    # === СЛЕШ-КОМАНДА ДЛЯ МОДЕРАТОРОВ ===
+    @app_commands.command(name="создать_промокод", description="Создать промокод в казино (только для модераторов)")
+    @app_commands.describe(
+        code="Уникальное название промокода (латиницей)",
+        amount="Сколько монет получит игрок",
+        uses="Максимальное число активаций (0 - безлимит)",
+        hours="Время жизни в часах (0 - бессрочно)"
+    )
+    async def create_promo_cmd(self, interaction: discord.Interaction, code: str, amount: int, uses: int = 0, hours: float = 0):
+        if not has_moderator_role(interaction.user):
+            await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
+            return
+        
+        if amount <= 0:
+            await interaction.response.send_message("❌ Сумма должна быть больше нуля.", ephemeral=True)
+            return
+        if uses < 0 or hours < 0:
+            await interaction.response.send_message("❌ Лимиты не могут быть отрицательными.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        success, msg = await self.store.create_promo(code, amount, uses, hours)
+        await interaction.followup.send(msg, ephemeral=True)
+
 
 async def setup(bot: commands.Bot): 
     await bot.add_cog(Casino(bot))
