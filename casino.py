@@ -210,7 +210,7 @@ class PromoModal(ui.Modal, title="Активация промокода"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        success, message = await self.cog.store.activate_promo(self.input.value, interaction.user.id)
+        success, message = await self.cog.store.activate_promo(self.code_input.value, interaction.user.id)
         await interaction.followup.send(message, ephemeral=True)
 
 class CustomRoleModal(ui.Modal, title="Создание кастомной роли"):
@@ -417,7 +417,7 @@ class Casino(commands.Cog):
         uses="Максимальное число активаций (0 - безлимит)",
         hours="Время жизни в часах (0 - бессрочно)"
     )
-    async def create_promo_cmd(self, interaction: discord.Interaction, code: str, amount: int, uses: int = 0, hours: float = 0):
+    async def create_promo_cmd(self, interaction: discord.Interaction, code: str, amount: int, uses: int = 0, hours: float = 0.0):
         if not has_moderator_role(interaction.user):
             await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
             return
