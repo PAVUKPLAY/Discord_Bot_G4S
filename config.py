@@ -1,6 +1,10 @@
 import os
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+GUILD_ID = os.getenv('GUILD_ID')  # <--- ID вашего сервера
+if GUILD_ID:
+    GUILD_ID = int(GUILD_ID)
+
 SERVER_IP = os.getenv('SERVER_IP', '80.242.59.106')
 SERVER_PORT = int(os.getenv('SERVER_PORT', '2303'))
 TARGET_CHANNEL_ID = os.getenv('TARGET_CHANNEL_ID')
