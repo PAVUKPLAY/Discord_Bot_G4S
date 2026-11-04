@@ -37,11 +37,11 @@ class CleanEmojiFormatter(logging.Formatter):
         return f"[{timestamp}] {message}"
 
 # Полностью глушим системные логгеры Discord и запросов
-for name in ['discord', 'discord.player', 'discord.voice_state', 'discord.gateway', 'discord.client', 'discord.http', 'httpx', 'faster_whisper', 'edge_tts']:
+for name in ['discord', 'discord.player', 'discord.voice_state', 'discord.gateway', 'discord.client', 'discord.http', 'discord.ui.view', 'httpx', 'faster_whisper', 'edge_tts']:
     lg = logging.getLogger(name)
     lg.handlers = []
     lg.propagate = False
-    lg.setLevel(logging.CRITICAL) # Показываем только критические ошибки
+    lg.setLevel(logging.CRITICAL)
 
 handler = logging.StreamHandler()
 handler.setFormatter(CleanEmojiFormatter(datefmt='%d.%m.%Y %H:%M'))
