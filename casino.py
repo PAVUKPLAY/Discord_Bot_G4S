@@ -173,20 +173,16 @@ class CasinoStore:
                 if not row:
                     return False, "❌ Промокод не найден."
                 
-                # Проверка на время
                 if row["expires_at"] > 0 and now > row["expires_at"]:
                     return False, "❌ Срок действия промокода истек."
                 
-                # Проверка на лимит активаций
                 if row["max_uses"] > 0 and row["current_uses"] >= row["max_uses"]:
                     return False, "❌ Лимит активаций этого промокода исчерпан."
                 
-                # Проверка, активировал ли уже этот юзер
                 usage = con.execute("SELECT 1 FROM promo_usages WHERE code=? AND user_id=?", (code, user_id)).fetchone()
                 if usage:
                     return False, "❌ Вы уже активировали этот промокод."
                 
-                # Выдача
                 con.execute("UPDATE promo_codes SET current_uses = current_uses + 1 WHERE code=?", (code,))
                 con.execute("INSERT INTO promo_usages (code, user_id) VALUES (?, ?)", (code, user_id))
                 
@@ -200,6 +196,31 @@ class CasinoStore:
 
 
 # ==================== МОДАЛЬНЫЕ ОКНА ====================
+
+class CreatePromoModal(ui.Modal, title="Создание промокода"):
+    code_input = ui.TextInput(label="Промокод", placeholder="Например: G4S2026", required=True, max_length=50)
+    amount_input = ui.TextInput(label="Сумма монет", placeholder="Например: 1000", required=True)
+    uses_input = ui.TextInput(label="Кол-во активаций (0 - безлимит)", default="0", required=True)
+    hours_input = ui.TextInput(label="Время в часах (0 - бессрочно)", default="0", required=True)
+
+    def __init__(self, cog):
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            amount = int(self.amount_input.value)
+            uses = int(self.uses_input.value)
+            hours = float(self.hours_input.value)
+            
+            if amount <= 0: raise ValueError("Сумма должна быть больше 0.")
+            if uses < 0 or hours < 0: raise ValueError("Лимиты не могут быть отрицательными.")
+            
+            await interaction.response.defer(ephemeral=True)
+            success, msg = await self.cog.store.create_promo(self.code_input.value, amount, uses, hours)
+            await interaction.followup.send(msg, ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("❌ Неверный формат ввода. Сумма и лимиты должны быть числами (больше или равны 0).", ephemeral=True)
 
 class PromoModal(ui.Modal, title="Активация промокода"):
     code_input = ui.TextInput(label="Введите промокод", placeholder="Например: G4S2026", required=True, max_length=50)
@@ -261,7 +282,6 @@ class ShopView(ui.View):
     def __init__(self, cog):
         super().__init__(timeout=180)
         self.add_item(ShopSelect(cog))
-
 
 # ==================== ОСНОВНАЯ ПАНЕЛЬ ====================
 
@@ -409,30 +429,23 @@ class Casino(commands.Cog):
         self.bot = bot
         self.store = CasinoStore()
 
-    # === СЛЕШ-КОМАНДА ДЛЯ МОДЕРАТОРОВ ===
-    @app_commands.command(name="создать_промокод", description="Создать промокод в казино (только для модераторов)")
-    @app_commands.describe(
-        code="Уникальное название промокода (латиницей)",
-        amount="Сколько монет получит игрок",
-        uses="Максимальное число активаций (0 - безлимит)",
-        hours="Время жизни в часах (0 - бессрочно)"
-    )
-    async def create_promo_cmd(self, interaction: discord.Interaction, code: str, amount: int, uses: int = 0, hours: float = 0.0):
+    # === НОВАЯ СЛЕШ-КОМАНДА ===
+    @app_commands.command(name="promo", description="Создать промокод в казино (только для модераторов)")
+    async def promo_cmd(self, interaction: discord.Interaction):
         if not has_moderator_role(interaction.user):
             await interaction.response.send_message("❌ У вас недостаточно прав.", ephemeral=True)
             return
-        
-        if amount <= 0:
-            await interaction.response.send_message("❌ Сумма должна быть больше нуля.", ephemeral=True)
-            return
-        if uses < 0 or hours < 0:
-            await interaction.response.send_message("❌ Лимиты не могут быть отрицательными.", ephemeral=True)
-            return
+            
+        await interaction.response.send_message("Нажмите на кнопку ниже, чтобы открыть форму создания промокода.", view=PromoCreateView(self), ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True)
-        success, msg = await self.store.create_promo(code, amount, uses, hours)
-        await interaction.followup.send(msg, ephemeral=True)
+class PromoCreateView(ui.View):
+    def __init__(self, cog):
+        super().__init__(timeout=120)
+        self.cog = cog
 
+    @ui.button(label="📝 Создать промокод", style=discord.ButtonStyle.primary)
+    async def open_modal(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(CreatePromoModal(self.cog))
 
 async def setup(bot: commands.Bot): 
     await bot.add_cog(Casino(bot))
