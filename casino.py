@@ -429,7 +429,6 @@ class Casino(commands.Cog):
         self.bot = bot
         self.store = CasinoStore()
 
-    # === НОВАЯ СЛЕШ-КОМАНДА ===
     @app_commands.command(name="promo", description="Создать промокод в казино (только для модераторов)")
     async def promo_cmd(self, interaction: discord.Interaction):
         if not has_moderator_role(interaction.user):
