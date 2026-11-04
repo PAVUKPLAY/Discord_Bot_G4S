@@ -458,7 +458,7 @@ class StationSelect(ui.Select):
             try:
                 await interaction.message.edit(view=None)
             except discord.NotFound:
-                pass  # Сообщение уже удалено или устарело — игнорируем
+                pass
         else:
             await interaction.followup.send("❌ Не удалось запустить поток.", ephemeral=True)
 
@@ -501,6 +501,9 @@ class RadioControlView(ui.View):
             await interaction.response.send_modal(ChangeStationModal(self.radio_manager))
             return
 
+        # Сразу деферим, чтобы не было ошибки Unknown interaction
+        await interaction.response.defer(ephemeral=True)
+
         # === ПРОВЕРКА НА ПРОПУСК ГОЛОСОВАНИЯ ===
         casino_cog = interaction.client.get_cog("Casino")
         if casino_cog:
@@ -508,7 +511,7 @@ class RadioControlView(ui.View):
             if inventory.get("radio_skip", 0) > 0:
                 success = await casino_cog.store.use_item(interaction.user.id, "radio_skip")
                 if success:
-                    await interaction.response.send_message("🎫 Вы использовали пропуск смены радио! Голосование пропущено.", ephemeral=True)
+                    await interaction.followup.send("🎫 Вы использовали пропуск смены радио! Голосование пропущено.", ephemeral=True)
                     await interaction.user.send("Выберите станцию:", view=OpenChangeModalView(self.radio_manager))
                     return
             
@@ -525,7 +528,7 @@ class RadioControlView(ui.View):
         embed.set_footer(text="Code by PAVUK")
         msg = await interaction.channel.send(content=mentions, embed=embed, view=view)
         view.message = msg
-        await interaction.response.send_message("Запущено голосование в канале.", ephemeral=True)
+        await interaction.followup.send("Запущено голосование в канале.", ephemeral=True)
 
     @ui.button(label="🔊 Громкость", style=discord.ButtonStyle.secondary, custom_id="radio_volume")
     async def volume(self, interaction: discord.Interaction, button: ui.Button):
