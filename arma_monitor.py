@@ -82,7 +82,6 @@ async def update_status(bot, monitor_message):
             en_players = sorted([p for p in remaining_players if p not in ru_players])
             non_allowed_players = [p for p in all_names if p not in allowed_players]
         except Exception as e:
-            # Изменено с ERROR на DEBUG, чтобы не спамить
             logger.debug(f"Ошибка получения данных от Arma 3: {e}")
             status_text = "🔴 НЕДОСТУПЕН"
             online_text = "0/0"
@@ -136,6 +135,11 @@ async def update_status(bot, monitor_message):
         else: monitor_message = await channel.send(embed=embed)
 
         await bot.change_presence(activity=discord.Game(name=f"Онлайн: {online_text}"))
+        return monitor_message
+    except discord.HTTPException as e:
+        # Игнорируем ошибки закрытия транспорта при рестарте
+        if "Cannot write to closing transport" not in str(e):
+            logger.error(f"Критическая ошибка в цикле автообновления: {e}")
         return monitor_message
     except Exception as e:
         logger.error(f"Критическая ошибка в цикле автообновления: {e}")
