@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 import logging
 import asyncio
 import re
+import config # Импортируем config для доступа к GUILD_ID
 from config import DISCORD_TOKEN
 from arma_monitor import update_status, cleanup_monitor
 from ai_chat import on_ai_message, clear_history
@@ -36,7 +37,7 @@ class CleanEmojiFormatter(logging.Formatter):
         timestamp = self.formatTime(record, self.datefmt)
         return f"[{timestamp}] {message}"
 
-# Полностью глушим системные логгеры Discord и запросов
+# Глушим системные логи
 for name in ['discord', 'discord.player', 'discord.voice_state', 'discord.gateway', 'discord.client', 'discord.http', 'discord.ui.view', 'httpx', 'faster_whisper', 'edge_tts']:
     lg = logging.getLogger(name)
     lg.handlers = []
@@ -134,8 +135,16 @@ async def on_ready():
     logger.info(f"Бот {bot.user.name} успешно запущен и готов к работе!")
     
     try:
-        await bot.tree.sync()
-        logger.info("Слеш-команды синхронизированы")
+        if config.GUILD_ID:
+            # Мгновенная синхронизация для конкретного сервера
+            guild = discord.Object(id=config.GUILD_ID)
+            bot.tree.copy_global_to(guild=guild)
+            await bot.tree.sync(guild=guild)
+            logger.info(f"Слеш-команды синхронизированы для сервера {config.GUILD_ID}")
+        else:
+            # Глобальная синхронизация (с задержкой Discord)
+            await bot.tree.sync()
+            logger.info("Слеш-команды синхронизированы глобально (может занять до 1 часа)")
     except Exception as e:
         logger.error(f"Ошибка синхронизации слеш-команд: {e}")
 
