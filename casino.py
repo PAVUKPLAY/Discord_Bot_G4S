@@ -8,7 +8,6 @@ from pathlib import Path
 import discord
 from discord import ui, app_commands
 from discord.ext import commands
-from discord.errors import HTTPException
 from utils import has_moderator_role
 
 logger = logging.getLogger(__name__)
@@ -128,11 +127,20 @@ class CasinoStore:
                 
                 if item_id == "daily_boost":
                     con.execute("UPDATE casino_users SET daily_boost = daily_boost + 1 WHERE user_id=?", (user_id,))
-                else:
+                elif item_id != "custom_role":
                     con.execute("INSERT INTO casino_inventory (user_id, item_id, amount) VALUES (?, ?, 1) ON CONFLICT(user_id, item_id) DO UPDATE SET amount = amount + 1", (user_id, item_id))
                 
                 con.execute("INSERT INTO casino_history(user_id, game, bet, delta, balance_after) VALUES (?, 'Покупка в магазине', 0, ?, ?)", (user_id, -price, balance - price))
                 return True, f"✅ Вы успешно купили **{name}** за {fmt(price)} монет!"
+
+    async def refund_custom_role(self, user_id: int):
+        price = SHOP_ITEMS["custom_role"][1]
+        async with self.lock:
+            with self._connect() as con:
+                self._ensure_user(con, user_id)
+                con.execute("UPDATE casino_users SET balance = balance + ? WHERE user_id=?", (price, user_id))
+                balance = int(con.execute("SELECT balance FROM casino_users WHERE user_id=?", (user_id,)).fetchone()["balance"])
+                con.execute("INSERT INTO casino_history(user_id, game, bet, delta, balance_after) VALUES (?, 'Возврат покупки роли', 0, ?, ?)", (user_id, price, balance))
 
     async def get_inventory(self, user_id: int) -> dict:
         async with self.lock:
@@ -238,6 +246,10 @@ class CustomRoleModal(ui.Modal, title="Создание кастомной ро�
     role_name = ui.TextInput(label="Название роли", placeholder="Например: Кибер-Кот", max_length=32, required=True)
     color_hex = ui.TextInput(label="Цвет (HEX)", placeholder="#FF0000", max_length=7, required=True)
 
+    def __init__(self, cog):
+        super().__init__()
+        self.cog = cog
+
     async def on_submit(self, interaction: discord.Interaction):
         try:
             color = discord.Color.from_str(self.color_hex.value)
@@ -246,15 +258,29 @@ class CustomRoleModal(ui.Modal, title="Создание кастомной ро�
             return
 
         await interaction.response.defer(ephemeral=True)
+        success, message = await self.cog.store.buy_item(interaction.user.id, "custom_role")
+        if not success:
+            await interaction.followup.send(message, ephemeral=True)
+            return
         
+        role = None
         try:
             role = await interaction.guild.create_role(name=self.role_name.value, color=color)
             await interaction.user.add_roles(role)
-            await interaction.followup.send(f"✅ Роль **{role.name}** успешно создана и выдана вам!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.followup.send("❌ У бота нет прав на создание ролей.", ephemeral=True)
-        except HTTPException as e:
-            await interaction.followup.send(f"❌ Ошибка Discord: {e}", ephemeral=True)
+        except discord.HTTPException as e:
+            if role:
+                try:
+                    await role.delete(reason="Откат неудачной покупки кастомной роли")
+                except discord.HTTPException:
+                    logger.exception("Не удалось удалить роль после неудачной выдачи.")
+            await self.cog.store.refund_custom_role(interaction.user.id)
+            logger.exception("Не удалось создать или выдать кастомную роль.")
+            if isinstance(e, discord.Forbidden):
+                await interaction.followup.send("❌ У бота нет прав на создание/выдачу роли. Монеты возвращены.", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Discord не создал роль. Монеты возвращены.", ephemeral=True)
+            return
+        await interaction.followup.send(f"✅ Роль **{role.name}** успешно создана и выдана вам!", ephemeral=True)
 
 class ShopSelect(ui.Select):
     def __init__(self, cog):
@@ -267,13 +293,21 @@ class ShopSelect(ui.Select):
     async def callback(self, interaction: discord.Interaction):
         item_id = self.values[0]
         name, price, _ = SHOP_ITEMS[item_id]
+
+        # Покупка роли завершается после заполнения формы, чтобы не терять монеты при её закрытии.
+        if item_id == "custom_role":
+            balance = await self.cog.store.balance(interaction.user.id)
+            if balance < price:
+                await interaction.response.send_message(
+                    f"❌ Недостаточно монет. Нужно {fmt(price)}, у вас {fmt(balance)}.", ephemeral=True
+                )
+                return
+            await interaction.response.send_modal(CustomRoleModal(self.cog))
+            return
         
         success, msg = await self.cog.store.buy_item(interaction.user.id, item_id)
         
         if success:
-            if item_id == "custom_role":
-                await interaction.response.send_modal(CustomRoleModal())
-                return
             await interaction.response.send_message(msg, ephemeral=True)
         else:
             await interaction.response.send_message(msg, ephemeral=True)
