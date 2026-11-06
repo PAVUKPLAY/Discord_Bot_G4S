@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -12,27 +13,35 @@ os.makedirs(DATA_DIR, exist_ok=True)
 def load_settings():
     logger.info(f"Загрузка настроек из {SETTINGS_FILE}")
     if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            try:
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                logger.info(f"Настройки загружены: {data}")
-                return data
-            except Exception as e:
-                logger.error(f"Ошибка загрузки настроек: {e}")
-                return {}
+            if not isinstance(data, dict):
+                raise ValueError("Ожидался объект настроек.")
+            logger.info("Настройки загружены.")
+            return data
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Ошибка загрузки настроек: {e}")
+            return {}
     logger.warning(f"Файл {SETTINGS_FILE} не найден — используются значения по умолчанию")
     return {}
 
 def save_settings(settings):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix="settings_", suffix=".tmp", dir=DATA_DIR)
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        os.replace(temp_path, SETTINGS_FILE)
         logger.info(f"Настройки сохранены: {settings}")
     except Exception as e:
         logger.error(f"Ошибка сохранения настроек: {e}")
         raise
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 settings = load_settings()
 
