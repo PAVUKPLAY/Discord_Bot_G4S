@@ -256,6 +256,11 @@ class RadioManager:
         if not vc: return
         guild_id = channel.guild.id
 
+        if vc.is_playing() and self.current_urls.get(guild_id):
+            if RADIO_TEXT_CHANNEL_ID:
+                await self.ensure_control_panel(bot, RADIO_TEXT_CHANNEL_ID)
+            return
+
         if RADIO_DEFAULT_STATION:
             resolved = await self.resolve_station(RADIO_DEFAULT_STATION)
             if resolved:
@@ -295,9 +300,11 @@ class RadioManager:
                 for row in msg.components:
                     for comp in row.children:
                         if hasattr(comp, "custom_id") and comp.custom_id == "radio_change":
-                            try: await msg.delete()
-                            except: pass
-                            break
+                            view = RadioControlView(self)
+                            await msg.edit(embed=self._build_embed(guild_id), view=view)
+                            self.control_messages[guild_id] = msg
+                            self.control_views[guild_id] = view
+                            return
         embed = self._build_embed(guild_id)
         view = RadioControlView(self)
         msg = await channel.send(embed=embed, view=view)
