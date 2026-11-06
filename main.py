@@ -5,7 +5,7 @@ import asyncio
 import re
 import config # Импортируем config для доступа к GUILD_ID
 from config import DISCORD_TOKEN
-from arma_monitor import update_status, cleanup_monitor
+from arma_monitor import update_status
 from ai_chat import on_ai_message, clear_history
 import event_manager
 from toggle_manager import get_status
@@ -74,13 +74,31 @@ async def setup_hook():
         await bot.load_extension("casino")
         logger.info("Модуль казино загружен.")
     except Exception as e:
-        logger.error(f"Ошибка загрузки модуля казино: {e}")
+        logger.exception(f"Ошибка загрузки модуля казино: {e}")
         
     try:
         await bot.load_extension("activity_manager")
         logger.info("Модуль активности загружен.")
     except Exception as e:
-        logger.error(f"Ошибка загрузки модуля активности: {e}")
+        logger.exception(f"Ошибка загрузки модуля активности: {e}")
+
+    # Слушатели и persistent views регистрируются один раз, до первого on_ready.
+    bot.add_listener(event_manager.on_reaction_add, 'on_reaction_add')
+    bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
+    bot.add_view(RadioControlView(radio_manager))
+    bot.add_view(event_manager.CreateEventView())
+    bot.add_view(event_manager.DashboardView(radio_manager))
+    bot.add_view(welcome_manager.ApplyButton())
+
+    casino_cog = bot.get_cog("Casino")
+    if casino_cog:
+        bot.add_view(casino.CasinoView(casino_cog))
+    activity_cog = bot.get_cog("ActivityCog")
+    if activity_cog:
+        bot.add_view(activity_manager.ActivityView(activity_cog))
+    welcome_manager.register_pending_application_views(bot)
+    if not config.MODERATOR_ROLE_IDS:
+        logger.warning("MODERATOR_ROLE_IDS не задан: модераторские действия будут запрещены всем.")
 
 bot.setup_hook = setup_hook
 
@@ -133,39 +151,48 @@ async def on_member_join(member):
 async def on_ready():
     global monitor_message
     logger.info(f"Бот {bot.user.name} успешно запущен и готов к работе!")
-    
-    try:
-        if config.GUILD_ID:
-            # Мгновенная синхронизация для конкретного сервера
-            guild = discord.Object(id=config.GUILD_ID)
-            bot.tree.copy_global_to(guild=guild)
-            await bot.tree.sync(guild=guild)
-            logger.info(f"Слеш-команды синхронизированы для сервера {config.GUILD_ID}")
-        else:
-            # Глобальная синхронизация (с задержкой Discord)
-            await bot.tree.sync()
-            logger.info("Слеш-команды синхронизированы глобально (может занять до 1 часа)")
-    except Exception as e:
-        logger.error(f"Ошибка синхронизации слеш-команд: {e}")
 
-    bot.add_listener(event_manager.on_reaction_add, 'on_reaction_add')
-    bot.add_listener(event_manager.on_reaction_remove, 'on_reaction_remove')
+    # Повторная синхронизация после успешного результата не нужна; при сбое
+    # оставляем флаг сброшенным и попробуем ещё раз при следующем reconnect.
+    if not getattr(bot, "_g4s_commands_synced", False):
+        try:
+            if config.GUILD_ID:
+                guild = discord.Object(id=config.GUILD_ID)
+                bot.tree.copy_global_to(guild=guild)
+                await bot.tree.sync(guild=guild)
+                logger.info(f"Слеш-команды синхронизированы для сервера {config.GUILD_ID}")
+            else:
+                await bot.tree.sync()
+                logger.info("Слеш-команды синхронизированы глобально (может занять до 1 часа)")
+            bot._g4s_commands_synced = True
+        except Exception:
+            logger.exception("Ошибка синхронизации слеш-команд.")
 
-    await event_manager.sync_events(bot)
-    await cleanup_monitor(bot)
-    monitor_message = await update_status(bot, None)
-    await event_manager.cleanup_event_button(bot)
-    await event_manager.setup_dashboard(bot, radio_manager)
+    startup_steps = (
+        ("синхронизация мероприятий", lambda: event_manager.sync_events(bot)),
+        ("мониторинг Arma", lambda: update_status(bot, monitor_message)),
+        ("панель мероприятий", lambda: event_manager.setup_event_button(bot)),
+        ("панель управления", lambda: event_manager.setup_dashboard(bot, radio_manager)),
+        ("панель казино", lambda: casino.setup_casino_panel(bot)),
+        ("панель активности", lambda: activity_manager.setup_activity_panel(bot)),
+    )
+    for label, operation in startup_steps:
+        try:
+            result = await operation()
+            if label == "мониторинг Arma":
+                monitor_message = result
+        except Exception:
+            logger.exception(f"Не удалось выполнить начальную настройку: {label}")
 
-    bot.add_view(RadioControlView(radio_manager))
-    bot.loop.create_task(radio_manager.auto_start(bot))
-
-    await casino.setup_casino_panel(bot)
-    await activity_manager.setup_activity_panel(bot)
+    radio_task = getattr(bot, "_g4s_radio_task", None)
+    if radio_task is None or radio_task.done():
+        bot._g4s_radio_task = bot.loop.create_task(radio_manager.auto_start(bot), name="g4s-radio-autostart")
 
     if not update_status_task.is_running():
         update_status_task.start()
-    bot.loop.create_task(event_manager.reminder_task(bot))
+    reminder_task = getattr(bot, "_g4s_reminder_task", None)
+    if reminder_task is None or reminder_task.done():
+        bot._g4s_reminder_task = bot.loop.create_task(event_manager.reminder_task(bot), name="g4s-event-reminders")
 
 @tasks.loop(seconds=60)
 async def update_status_task():
