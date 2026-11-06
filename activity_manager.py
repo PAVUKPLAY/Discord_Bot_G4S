@@ -5,7 +5,7 @@ import sqlite3
 import os
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from config import ACTIVITY_CHANNEL_ID
 
@@ -51,7 +51,7 @@ class ActivityStore:
                 pass
 
     def _check_daily_reset(self, con, user_id):
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         row = con.execute("SELECT last_date, join_date FROM activity WHERE user_id=?", (user_id,)).fetchone()
         
         if row:
@@ -114,7 +114,8 @@ class ActivityCog(commands.Cog):
             for vc in guild.voice_channels:
                 for member in vc.members:
                     if not member.bot:
-                        self.voice_sessions[member.id] = time.time()
+                        # При gateway reconnect сохраняем время уже открытой сессии.
+                        self.voice_sessions.setdefault(member.id, time.time())
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
@@ -164,7 +165,7 @@ class ActivityView(ui.View):
             join_date = stats['join_date'] if stats['join_date'] else "Неизвестно"
             
             embed.add_field(name="💰 Баланс казино", value=f"`{casino_balance} монет`", inline=True)
-            embed.add_field(name="📅 В отряде с", value=f"`{join_date}`", inline=True)
+            embed.add_field(name="📅 Активность отслеживается с", value=f"`{join_date}`", inline=True)
             embed.add_field(name="⠀", value="⠀", inline=True) # пустышка для ровной сетки
             
             embed.add_field(name="🎙️ В голосовых (всего)", value=f"`{fmt_time(stats['voice_total'])}`", inline=True)
