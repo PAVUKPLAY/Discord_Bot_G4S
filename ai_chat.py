@@ -6,6 +6,7 @@ import logging
 import json
 import os
 import tempfile
+import tempfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import discord
@@ -41,22 +42,51 @@ def load_ai_memory():
     if os.path.exists(AI_MEMORY_FILE):
         try:
             with open(AI_MEMORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            # Старый формат был словарём conversation_id -> messages.
+            if isinstance(data, dict) and "conversations" in data:
+                return (
+                    data.get("conversations", {}),
+                    data.get("owners", {}),
+                    {int(key): value for key, value in data.get("message_map", {}).items()},
+                )
+            if isinstance(data, dict):
+                return data, {}, {}
+            logger.error("Файл памяти ИИ имеет неожиданный формат; начинаю с пустой памяти.")
         except Exception as e:
             logger.error(f"Ошибка загрузки памяти ИИ: {e}")
-    return {}
+    return {}, {}, {}
 
-def save_ai_memory(memory):
+def save_ai_memory(memory, owners=None, message_map=None):
+    owners = owners or {}
+    message_map = message_map or {}
     try:
         if len(memory) > 100:
-            memory = dict(list(memory.items())[-100:])
-        with open(AI_MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(memory, f, ensure_ascii=False, indent=2)
+            keep = set(list(memory)[-100:])
+            memory = {key: value for key, value in memory.items() if key in keep}
+            owners = {key: value for key, value in owners.items() if key in keep}
+            message_map = {key: value for key, value in message_map.items() if value in keep}
+        payload = {
+            "conversations": memory,
+            "owners": owners,
+            "message_map": message_map,
+        }
+        directory = os.path.dirname(AI_MEMORY_FILE)
+        os.makedirs(directory, exist_ok=True)
+        fd, temp_path = tempfile.mkstemp(prefix="ai_memory_", suffix=".tmp", dir=directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, AI_MEMORY_FILE)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
     except Exception as e:
         logger.error(f"Ошибка сохранения памяти ИИ: {e}")
 
-conversations = load_ai_memory()
-msg_to_conv = {}
+conversations, conversation_owners, msg_to_conv = load_ai_memory()
 MAX_HISTORY_LENGTH = 15
 
 SYSTEM_PROMPT = {
@@ -272,6 +302,8 @@ async def on_ai_message(message, bot):
                 ref_id = message.reference.message_id
                 if ref_id in msg_to_conv: conv_id = msg_to_conv[ref_id]
 
+            # История относится к пользователю, который начал этот диалог.
+            conversation_owners.setdefault(conv_id, str(message.author.id))
             history = conversations.get(conv_id, [])
             image_url = None
             if image_attachments:
@@ -314,18 +346,30 @@ async def on_ai_message(message, bot):
                 if len(history) > MAX_HISTORY_LENGTH: history = history[-MAX_HISTORY_LENGTH:]
 
                 conversations[conv_id] = history
-                save_ai_memory(conversations)
 
                 # ВСЕГДА ОТВЕЧАЕМ ТЕКСТОМ
                 sent_messages = await send_long_answer(message, answer)
                 for msg in sent_messages: msg_to_conv[msg.id] = conv_id
 
                 msg_to_conv[message.id] = conv_id
-                if len(msg_to_conv) > 5000: msg_to_conv.clear()
+                if len(msg_to_conv) > 5000:
+                    for old_message_id in list(msg_to_conv)[:-4000]:
+                        msg_to_conv.pop(old_message_id, None)
+                save_ai_memory(conversations, conversation_owners, msg_to_conv)
 
 async def clear_history(user_id):
-    global conversations
-    conversations.clear()
-    msg_to_conv.clear()
-    save_ai_memory(conversations)
+    user_id = str(user_id)
+    conversation_ids = [
+        conv_id for conv_id, owner_id in conversation_owners.items()
+        if str(owner_id) == user_id
+    ]
+    if not conversation_ids:
+        return False
+    for conv_id in conversation_ids:
+        conversations.pop(conv_id, None)
+        conversation_owners.pop(conv_id, None)
+    for message_id, conv_id in list(msg_to_conv.items()):
+        if conv_id in conversation_ids:
+            msg_to_conv.pop(message_id, None)
+    save_ai_memory(conversations, conversation_owners, msg_to_conv)
     return True
