@@ -7,6 +7,7 @@ import json
 import os
 import asyncio
 import logging
+import tempfile
 from config import EVENT_CHANNEL_ID, ANNOUNCE_CHANNEL_ID, PING_EVERYONE
 from toggle_manager import get_status, set_status
 from utils import has_moderator_role
@@ -22,22 +23,27 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 def load_events():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            try:
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                for eid, ev in data.items():
-                    ev['participants'] = set(ev['participants'])
-                    ev['non_participants'] = set(ev['non_participants'])
-                    try:
-                        dt = datetime.fromisoformat(ev['datetime'])
-                        if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=MSK)
-                            ev['datetime'] = dt.isoformat()
-                    except Exception:
-                        pass
-                return data
-            except Exception as e:
-                return {}
+            if not isinstance(data, dict):
+                raise ValueError("Ожидался объект мероприятий.")
+            for eid, ev in data.items():
+                if not isinstance(ev, dict):
+                    logger.warning(f"Пропускаю повреждённое мероприятие {eid}.")
+                    continue
+                ev['participants'] = set(ev.get('participants', []))
+                ev['non_participants'] = set(ev.get('non_participants', []))
+                try:
+                    dt = datetime.fromisoformat(ev['datetime'])
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=MSK)
+                        ev['datetime'] = dt.isoformat()
+                except (KeyError, TypeError, ValueError):
+                    logger.warning(f"У мероприятия {eid} повреждена дата.")
+            return {eid: ev for eid, ev in data.items() if isinstance(ev, dict)}
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Не удалось загрузить мероприятия из {DATA_FILE}: {e}")
     return {}
 
 def save_events(events):
@@ -47,12 +53,19 @@ def save_events(events):
         data[eid]['participants'] = list(ev['participants'])
         data[eid]['non_participants'] = list(ev['non_participants'])
     try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        fd, temp_path = tempfile.mkstemp(prefix="events_", suffix=".tmp", dir=DATA_DIR)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        os.replace(temp_path, DATA_FILE)
     except Exception:
-        pass
+        logger.exception("Не удалось сохранить список мероприятий.")
+        raise
+    finally:
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 events = load_events()
 
@@ -307,12 +320,25 @@ async def cleanup_event_button(bot):
     await setup_event_button(bot)
 
 async def send_reminder(bot, event, title, description, color):
+    if not ANNOUNCE_CHANNEL_ID:
+        logger.warning("Напоминание не отправлено: ANNOUNCE_CHANNEL_ID не задан.")
+        return False
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
-    if not channel: return
+    if not channel:
+        try:
+            channel = await bot.fetch_channel(ANNOUNCE_CHANNEL_ID)
+        except discord.HTTPException:
+            logger.exception("Не удалось получить канал для напоминаний.")
+            return False
     embed = discord.Embed(title=title, description=description, color=color)
     embed.set_footer(text="Code by PAVUK")
     content = "@everyone" if PING_EVERYONE else None
-    await channel.send(content=content, embed=embed)
+    try:
+        await channel.send(content=content, embed=embed)
+        return True
+    except discord.HTTPException:
+        logger.exception("Не удалось отправить напоминание о мероприятии.")
+        return False
 
 async def reminder_task(bot):
     await bot.wait_until_ready()
@@ -331,15 +357,21 @@ async def reminder_task(bot):
                 save_events(events)
                 continue
 
-            if not event.get('reminded_24h', False) and 1 * 3600 < delta <= 24 * 3600:
-                await send_reminder(bot, event, title="📅 Напоминание о смежке!", description=f"**{event['title']}** начнется <t:{ts}:R>.\nНе забудьте подтвердить участие!", color=discord.Color.orange())
-                event['reminded_24h'] = True; save_events(events)
-            elif not event.get('reminded_1h', False) and 5 * 60 < delta <= 1 * 3600:
-                await send_reminder(bot, event, title="⏳ Скоро начало!", description=f"Мероприятие **{event['title']}** начнется <t:{ts}:R>.\nГотовьтесь!", color=discord.Color.blue())
-                event['reminded_1h'] = True; save_events(events)
-            elif not event.get('reminded_start', False) and -2 * 3600 <= delta <= 5 * 60:
-                await send_reminder(bot, event, title="🚀 Мероприятие началось!", description=f"Мероприятие **{event['title']}** **уже началось**!\nПрисоединяйтесь к каналу!", color=discord.Color.green())
-                event['reminded_start'] = True; save_events(events)
+            try:
+                sent = False
+                if not event.get('reminded_24h', False) and 1 * 3600 < delta <= 24 * 3600:
+                    sent = await send_reminder(bot, event, title="📅 Напоминание о смежке!", description=f"**{event['title']}** начнется <t:{ts}:R>.\nНе забудьте подтвердить участие!", color=discord.Color.orange())
+                    if sent: event['reminded_24h'] = True
+                elif not event.get('reminded_1h', False) and 5 * 60 < delta <= 1 * 3600:
+                    sent = await send_reminder(bot, event, title="⏳ Скоро начало!", description=f"Мероприятие **{event['title']}** начнется <t:{ts}:R>.\nГотовьтесь!", color=discord.Color.blue())
+                    if sent: event['reminded_1h'] = True
+                elif not event.get('reminded_start', False) and -2 * 3600 <= delta <= 5 * 60:
+                    sent = await send_reminder(bot, event, title="🚀 Мероприятие началось!", description=f"Мероприятие **{event['title']}** **уже началось**!\nПрисоединяйтесь к каналу!", color=discord.Color.green())
+                    if sent: event['reminded_start'] = True
+                if sent:
+                    save_events(events)
+            except Exception:
+                logger.exception(f"Ошибка напоминания о мероприятии {eid}.")
                 
         await asyncio.sleep(30)
 
