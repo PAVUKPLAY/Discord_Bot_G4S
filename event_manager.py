@@ -365,7 +365,7 @@ async def reminder_task(bot):
                 elif not event.get('reminded_1h', False) and 5 * 60 < delta <= 1 * 3600:
                     sent = await send_reminder(bot, event, title="⏳ Скоро начало!", description=f"Мероприятие **{event['title']}** начнется <t:{ts}:R>.\nГотовьтесь!", color=discord.Color.blue())
                     if sent: event['reminded_1h'] = True
-                elif not event.get('reminded_start', False) and -2 * 3600 <= delta <= 5 * 60:
+                elif not event.get('reminded_start', False) and -2 * 3600 <= delta <= 0:
                     sent = await send_reminder(bot, event, title="🚀 Мероприятие началось!", description=f"Мероприятие **{event['title']}** **уже началось**!\nПрисоединяйтесь к каналу!", color=discord.Color.green())
                     if sent: event['reminded_start'] = True
                 if sent:
@@ -411,7 +411,7 @@ async def on_reaction_remove(reaction, user):
     await update_event_embed(reaction.message, event_id)
 
 async def sync_events(bot):
-    for eid, event in events.items():
+    for eid, event in list(events.items()):
         channel = bot.get_channel(event['channel_id'])
         if not channel: continue
         try:

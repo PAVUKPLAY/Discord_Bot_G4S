@@ -6,7 +6,6 @@ import logging
 import json
 import os
 import tempfile
-import tempfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import discord

@@ -49,6 +49,7 @@ def get_status(feature: str, default: bool = True) -> bool:
     return settings.get(feature, default)
 
 def set_status(feature: str, value: bool):
+    updated_settings = {**settings, feature: value}
+    save_settings(updated_settings)
     settings[feature] = value
-    save_settings(settings)
     logger.info(f"Функция {feature} {'включена' if value else 'выключена'}")

@@ -127,7 +127,9 @@ async def update_status(bot, monitor_message):
 
         if monitor_message is None:
             async for msg in channel.history(limit=15):
-                if msg.author == bot.user and msg.embeds: monitor_message = msg; break
+                if msg.author == bot.user and any(item.title == embed.title for item in msg.embeds):
+                    monitor_message = msg
+                    break
 
         if monitor_message:
             try: await monitor_message.edit(embed=embed)

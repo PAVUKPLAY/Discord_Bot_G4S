@@ -1,3 +1,5 @@
+from contextlib import closing
+
 import discord
 from discord import ui
 from discord.ext import commands, tasks
@@ -33,7 +35,7 @@ class ActivityStore:
         return con
 
     def _init_db(self):
-        with self._connect() as con:
+        with closing(self._connect()) as con, con:
             con.execute("""
                 CREATE TABLE IF NOT EXISTS activity (
                     user_id INTEGER PRIMARY KEY,
@@ -50,43 +52,44 @@ class ActivityStore:
             except sqlite3.OperationalError:
                 pass
 
-    def _check_daily_reset(self, con, user_id):
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        row = con.execute("SELECT last_date, join_date FROM activity WHERE user_id=?", (user_id,)).fetchone()
-        
-        if row:
-            if row["last_date"] != today:
-                con.execute("UPDATE activity SET voice_daily=0, messages_daily=0, last_date=? WHERE user_id=?", (today, user_id))
-            if not row["join_date"]:
-                con.execute("UPDATE activity SET join_date=? WHERE user_id=?", (today, user_id))
-        else:
-            con.execute("INSERT INTO activity (user_id, last_date, join_date) VALUES (?, ?, ?)", (user_id, today, today))
-
     def add_activity(self, user_id: int, voice_sec: int = 0, messages: int = 0):
-        with self._connect() as con:
-            self._check_daily_reset(con, user_id)
+        today = datetime.now(timezone.utc).date().isoformat()
+        with closing(self._connect()) as con, con:
             con.execute("""
-                UPDATE activity 
-                SET voice_total = voice_total + ?, messages_total = messages_total + ?,
-                    voice_daily = voice_daily + ?, messages_daily = messages_daily + ?
-                WHERE user_id = ?
-            """, (voice_sec, messages, voice_sec, messages, user_id))
+                INSERT INTO activity (
+                    user_id, voice_total, messages_total, voice_daily,
+                    messages_daily, last_date, join_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    voice_total = activity.voice_total + excluded.voice_total,
+                    messages_total = activity.messages_total + excluded.messages_total,
+                    voice_daily = excluded.voice_daily + CASE
+                        WHEN activity.last_date = excluded.last_date THEN activity.voice_daily
+                        ELSE 0 END,
+                    messages_daily = excluded.messages_daily + CASE
+                        WHEN activity.last_date = excluded.last_date THEN activity.messages_daily
+                        ELSE 0 END,
+                    last_date = excluded.last_date,
+                    join_date = COALESCE(NULLIF(activity.join_date, ''), excluded.join_date)
+            """, (user_id, voice_sec, messages, voice_sec, messages, today, today))
 
     def get_user_stats(self, user_id: int):
-        with self._connect() as con:
-            self._check_daily_reset(con, user_id)
+        self.add_activity(user_id)
+        with closing(self._connect()) as con:
             return con.execute("SELECT * FROM activity WHERE user_id=?", (user_id,)).fetchone()
 
     def get_leaderboard(self, daily: bool = False, limit: int = 10):
         col_v = "voice_daily" if daily else "voice_total"
         col_m = "messages_daily" if daily else "messages_total"
-        with self._connect() as con:
+        date_filter = "AND last_date = ?" if daily else ""
+        params = (datetime.now(timezone.utc).date().isoformat(), limit) if daily else (limit,)
+        with closing(self._connect()) as con:
             return con.execute(f"""
                 SELECT user_id, {col_v} as voice, {col_m} as msgs 
                 FROM activity 
-                WHERE {col_v} > 0 OR {col_m} > 0
-                ORDER BY {col_v} DESC LIMIT ?
-            """, (limit,)).fetchall()
+                WHERE ({col_v} > 0 OR {col_m} > 0) {date_filter}
+                ORDER BY {col_v} DESC, {col_m} DESC, user_id LIMIT ?
+            """, params).fetchall()
 
 
 class ActivityCog(commands.Cog):
@@ -101,12 +104,20 @@ class ActivityCog(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def sync_task(self):
-        now = time.time()
+        now = time.monotonic()
         for user_id, join_time in list(self.voice_sessions.items()):
+            if self.voice_sessions.get(user_id) != join_time:
+                continue
             duration = int(now - join_time)
             if duration > 0:
-                await self.bot.loop.run_in_executor(None, self.store.add_activity, user_id, duration, 0)
-                self.voice_sessions[user_id] = now
+                checkpoint = join_time + duration
+                self.voice_sessions[user_id] = checkpoint
+                try:
+                    await self.bot.loop.run_in_executor(None, self.store.add_activity, user_id, duration, 0)
+                except sqlite3.Error:
+                    if self.voice_sessions.get(user_id) == checkpoint:
+                        self.voice_sessions[user_id] = join_time
+                    logger.exception("Не удалось сохранить голосовую активность пользователя %s.", user_id)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -115,12 +126,12 @@ class ActivityCog(commands.Cog):
                 for member in vc.members:
                     if not member.bot:
                         # При gateway reconnect сохраняем время уже открытой сессии.
-                        self.voice_sessions.setdefault(member.id, time.time())
+                        self.voice_sessions.setdefault(member.id, time.monotonic())
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
         if member.bot: return
-        now = time.time()
+        now = time.monotonic()
         if before.channel is None and after.channel is not None:
             self.voice_sessions[member.id] = now
         elif before.channel is not None and after.channel is None:
@@ -178,14 +189,14 @@ class ActivityView(ui.View):
         embed.set_footer(text="Code by PAVUK")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @ui.button(label="🕒 Топ 24 часа", style=discord.ButtonStyle.secondary, custom_id="act_daily")
+    @ui.button(label="🕒 Топ за сегодня", style=discord.ButtonStyle.secondary, custom_id="act_daily")
     async def daily_leaders(self, interaction: discord.Interaction, button: ui.Button):
         rows = await interaction.client.loop.run_in_executor(None, self.cog.store.get_leaderboard, True, 10)
         
-        embed = discord.Embed(title="🔥 Самые активные за 24 часа", color=discord.Color.orange())
+        embed = discord.Embed(title="🔥 Самые активные сегодня (UTC)", color=discord.Color.orange())
         
         if not rows:
-            embed.description = "За последние 24 часа активности не было."
+            embed.description = "Сегодня активности ещё не было."
         else:
             lines = []
             for i, row in enumerate(rows, 1):

@@ -35,6 +35,8 @@ class CleanEmojiFormatter(logging.Formatter):
             emoji = self.LEVEL_EMOJI.get(record.levelno, "•")
             message = f"{emoji} {message}"
         timestamp = self.formatTime(record, self.datefmt)
+        if record.exc_info:
+            message += "\n" + self.formatException(record.exc_info)
         return f"[{timestamp}] {message}"
 
 # Глушим системные логи
@@ -201,7 +203,7 @@ async def update_status_task():
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author.bot:
         return
     if message.content.startswith('/'):
         await bot.process_commands(message)
